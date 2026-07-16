@@ -60,21 +60,47 @@ async function putRoads(cfg, data, sha, fetchFn) {
   });
 }
 
-export async function writeRoads(cfg, data, { fetchFn = defaultFetch } = {}) {
+const delay = (ms) => new Promise(r => setTimeout(r, ms));
+
+// Does the file already on GitHub match exactly what we're about to write?
+// Used to turn a lost sha-race into a success: if a concurrent/previous write
+// already persisted our exact data, there's nothing left to do.
+async function remoteMatches(cfg, data, fetchFn) {
+  try {
+    const res = await fetchFn(rawUrl(cfg) + '?t=' + Date.now());
+    if (!res.ok) return false;
+    return JSON.stringify(migrate(await res.json())) === JSON.stringify(migrate(data));
+  } catch { return false; }
+}
+
+// Serialize writes: chain every writeRoads so two rapid saves can never race the
+// same sha (the second waits, then fetches a fresh sha). This is the common
+// cause of a self-inflicted 409 in a single-writer app.
+let writeChain = Promise.resolve();
+
+export function writeRoads(cfg, data, opts = {}) {
+  const run = writeChain.then(() => doWriteRoads(cfg, data, opts));
+  writeChain = run.then(() => {}, () => {}); // keep the chain alive on either outcome
+  return run;
+}
+
+async function doWriteRoads(cfg, data, { fetchFn = defaultFetch } = {}) {
   if (!cfg.token) throw new Error('No GitHub token configured');
-  let sha = await currentSha(cfg, fetchFn);
-  let res = await putRoads(cfg, data, sha, fetchFn);
-  if (res.status === 409) {
-    // Stale sha — someone else wrote the file since we fetched it. Re-fetch
-    // the current sha and retry exactly once before giving up.
-    sha = await currentSha(cfg, fetchFn);
-    res = await putRoads(cfg, data, sha, fetchFn);
-    if (res.status === 409) {
+  // Fetch fresh sha then PUT; on a stale-sha conflict (409/422) back off and
+  // retry with a re-fetched sha (handles GitHub replication lag), up to 3 tries.
+  for (let attempt = 0; attempt < 3; attempt++) {
+    const sha = await currentSha(cfg, fetchFn);
+    const res = await putRoads(cfg, data, sha, fetchFn);
+    if (res.ok) { await cacheWrite(data); return; }
+    if (res.status === 409 || res.status === 422) {
+      if (attempt < 2) { await delay(400 * (attempt + 1)); continue; }
+      // Retries exhausted — but our exact data may already be live (a racing
+      // write won the sha). If so, treat as success rather than a false error.
+      if (await remoteMatches(cfg, data, fetchFn)) { await cacheWrite(data); return; }
       throw new Error('Conflict — the roads file changed elsewhere; reload and try again.');
     }
+    throw new Error('write ' + res.status + ' — check token scope (contents: read/write)');
   }
-  if (!res.ok) throw new Error('write ' + res.status + ' — check token scope (contents: read/write)');
-  await cacheWrite(data);
 }
 
 export async function testConnection(cfg, { fetchFn = defaultFetch } = {}) {
