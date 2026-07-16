@@ -1343,10 +1343,10 @@
       "created": "2026-07-16",
       "driveTimeFromHome": null,
       "meta": {
-        "pavement": null,
-        "character": null,
-        "deer": null,
-        "notes": ""
+        "pavement": "rough",
+        "character": "technical",
+        "deer": "medium",
+        "notes": "test"
       }
     }
   ]
