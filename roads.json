@@ -1,6 +1,9 @@
 {
   "version": 2,
-  "home": null,
+  "home": {
+    "lat": 48.3160811030533,
+    "lon": 18.102722167968754
+  },
   "roads": [
     {
       "id": 1784209833916,
@@ -1341,7 +1344,14 @@
       ],
       "km": 11,
       "created": "2026-07-16",
-      "driveTimeFromHome": null,
+      "driveTimeFromHome": {
+        "minutes": 104,
+        "km": 148.6,
+        "computedForHome": {
+          "lat": 48.3160811030533,
+          "lon": 18.102722167968754
+        }
+      },
       "meta": {
         "pavement": "rough",
         "character": "technical",
@@ -10252,12 +10262,19 @@
       ],
       "km": 35.5,
       "created": "2026-07-16",
-      "driveTimeFromHome": null,
+      "driveTimeFromHome": {
+        "minutes": 87,
+        "km": 113.7,
+        "computedForHome": {
+          "lat": 48.3160811030533,
+          "lon": 18.102722167968754
+        }
+      },
       "meta": {
-        "pavement": null,
-        "character": null,
-        "deer": null,
-        "notes": ""
+        "pavement": "pristine",
+        "character": "mixed",
+        "deer": "low",
+        "notes": "asd"
       }
     }
   ]
