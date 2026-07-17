@@ -2,8 +2,8 @@
 const CACHE = 'tougemap-v2-1';
 const SHELL = ['./', './index.html', './styles.css',
   './js/app.js','./js/ui.js','./js/map.js','./js/library.js','./js/planner.js',
-  './js/store.js','./js/sync.js','./js/weather.js','./js/geo.js',
-  './js/curvature.js','./js/routing.js','./js/tonight-rank.js','./manifest.json'];
+  './js/store.js','./js/sync.js','./js/weather.js','./js/geo.js','./js/config.js',
+  './js/crypto.js','./js/curvature.js','./js/routing.js','./js/tonight-rank.js','./manifest.json'];
 
 self.addEventListener('install', e =>
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(SHELL)).then(() => self.skipWaiting())));

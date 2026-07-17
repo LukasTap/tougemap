@@ -12,8 +12,9 @@
 <body>
   <div id="app">
     <div id="sidebar">
-      <div id="header">
+      <div id="header" style="display:flex;align-items:center;justify-content:space-between">
         <div id="logo">TOUGEMAP<span>// Slovakia &amp; Borders</span></div>
+        <button id="settings-btn" class="pt-btn" title="Passphrase / token">🔑</button>
       </div>
       <div id="mode-tabs">
         <button class="mode-tab active" data-view="library">LIBRARY</button>
@@ -202,33 +203,23 @@
     </div>
   </div>
 
-  <!-- FIRST-RUN GITHUB ONBOARDING -->
+  <!-- UNLOCK / CREDENTIALS -->
   <div id="onboard" style="display:none">
     <div class="box">
-      <div id="logo" style="margin-bottom:16px">TOUGEMAP<span>// connect your GitHub repo</span></div>
+      <div id="logo" style="margin-bottom:8px">TOUGEMAP<span>// unlock</span></div>
+      <p style="font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:16px">Enter your passphrase to unlock your roads. Your data is encrypted — this passphrase decrypts it in your browser.</p>
       <form id="onboard-form">
         <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Owner (username or org)</label>
-          <input class="search-input" id="ob-owner" required>
-        </div>
-        <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Repo</label>
-          <input class="search-input" id="ob-repo" required>
-        </div>
-        <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Branch</label>
-          <input class="search-input" id="ob-branch" value="main">
-        </div>
-        <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Path to roads.json</label>
-          <input class="search-input" id="ob-path" value="roads.json">
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Passphrase</label>
+          <input class="search-input" id="ob-pass" type="password" autocomplete="off" required>
         </div>
         <div id="ob-token-row" style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">GitHub token (optional — only needed to save/edit from this device)</label>
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">GitHub token — only needed on this PC to save/edit</label>
           <input class="search-input" id="ob-token" type="password" autocomplete="off">
+          <div id="ob-token-note" style="font-size:10px;color:var(--text3);margin-top:4px"></div>
         </div>
         <div id="ob-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
-        <button type="submit" class="btn-planner primary" id="ob-submit">CONNECT</button>
+        <button type="submit" class="btn-planner primary" id="ob-submit">UNLOCK</button>
       </form>
     </div>
   </div>

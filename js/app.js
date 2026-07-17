@@ -4,8 +4,8 @@
 // planner (draw/save/edit/home) and Discover curvature UI.
 
 import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGroup } from './map.js';
-import { loadConfig, readRoads } from './sync.js';
-import { createWeatherClient, fogBadge, calcFogScore, wmoDesc } from './weather.js';
+import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
+import { createWeatherClient, fogBadge, calcFogScore, wmoDesc, nightFogRisk } from './weather.js';
 import { rankRoads, reachable, scoreRoad } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml } from './library.js';
 import {
@@ -14,15 +14,16 @@ import {
   deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker,
   onHomeChange
 } from './planner.js';
-import { buildOverpassQuery, fetchOverpass, joinAndScore, curvColor } from './curvature.js';
+import { nearestPoint } from './routing.js';
+import { buildOverpassQuery, fetchOverpass, joinAndScore, curvColor, fogColor } from './curvature.js';
 import {
   isDesktop, showView, showInspector, hideInspector, openSheet, closeSheet,
-  openNameModal, showOnboarding, setDiscoverStatus, initUi
+  openNameModal, showUnlock, hideOnboarding, setDiscoverStatus, initUi
 } from './ui.js';
 
 export const appState = {
   data: { version: 2, home: null, roads: [] },
-  cfg: loadConfig(),
+  auth: loadAuth(),      // { token, passphrase } — token=write, passphrase=decrypt
   weatherClient: createWeatherClient(),
   now: () => new Date()
 };
@@ -204,44 +205,94 @@ async function renderNearMe(container) {
 
 // ── SHARED ROAD INSPECTOR ────────────────────────────────────────────────────
 function roadInspectorHtml(road, editable) {
-  const dt = road.driveTimeFromHome?.minutes != null
-    ? `${road.driveTimeFromHome.minutes} min`
-    : (road.driveTimeFromHome?.approx ? `~${road.driveTimeFromHome.km} km (air)` : '—');
   const meta = road.meta || {};
+  const dh = road.driveTimeFromHome;
+  const fromHomeKm = dh?.km != null ? `${dh.km} km` : '—';
+  const fromHomeSub = dh?.minutes != null ? `${dh.minutes} min by road`
+    : (dh?.approx ? 'air (routing down)' : (appState.data.home ? 'not computed yet' : 'set Home point'));
+  const chips = metaChipsHtml(meta);
+  const subLbl = 'text-transform:none;letter-spacing:0;color:var(--text3);margin-top:2px;font-size:10px';
   return `
     <div class="road-name">${escapeHtml(road.name)}</div>
-    <div class="road-ref">${road.km} km · ${dt} from home</div>
-    <div class="road-lib-chips" style="margin-bottom:12px">${metaChipsHtml(meta)}</div>
-    <div id="inspector-weather" class="weather-loading">Loading forecast…</div>
-    ${editable ? `
-    <div class="section-title" style="margin-top:14px">Edit</div>
-    <div style="display:flex;gap:6px;margin-bottom:8px">
-      <button class="pt-btn" id="insp-rename-btn">Rename</button>
-      <button class="pt-btn danger" id="insp-delete-btn">Delete</button>
+    ${chips ? `<div class="road-lib-chips" style="margin:4px 0 12px">${chips}</div>` : '<div style="height:8px"></div>'}
+    <div class="stat-grid">
+      <div class="stat-card">
+        <div class="val">${fromHomeKm}</div>
+        <div class="lbl">From home</div>
+        <div class="lbl" style="${subLbl}">${fromHomeSub}</div>
+      </div>
+      <div class="stat-card">
+        <div class="val">${road.km} km</div>
+        <div class="lbl">Road length</div>
+        <div class="lbl" style="${subLbl}">${road.points.length} pts</div>
+      </div>
     </div>
-    <select class="search-input" id="insp-pavement" style="margin-bottom:6px">
-      <option value="">Pavement quality…</option>
-      <option value="pristine" ${meta.pavement === 'pristine' ? 'selected' : ''}>Pristine (rare)</option>
-      <option value="good" ${meta.pavement === 'good' ? 'selected' : ''}>Good</option>
-      <option value="rough" ${meta.pavement === 'rough' ? 'selected' : ''}>Rough parts</option>
-    </select>
-    <select class="search-input" id="insp-character" style="margin-bottom:6px">
-      <option value="">Character…</option>
-      <option value="flowing" ${meta.character === 'flowing' ? 'selected' : ''}>Flowing</option>
-      <option value="technical" ${meta.character === 'technical' ? 'selected' : ''}>Technical</option>
-      <option value="mixed" ${meta.character === 'mixed' ? 'selected' : ''}>Mixed</option>
-    </select>
-    <select class="search-input" id="insp-deer" style="margin-bottom:6px">
-      <option value="">Deer risk…</option>
-      <option value="low" ${meta.deer === 'low' ? 'selected' : ''}>Low</option>
-      <option value="medium" ${meta.deer === 'medium' ? 'selected' : ''}>Medium</option>
-      <option value="high" ${meta.deer === 'high' ? 'selected' : ''}>High</option>
-    </select>
-    <textarea class="search-input" id="insp-notes" placeholder="Notes" style="margin-bottom:6px;min-height:50px">${escapeHtml(meta.notes)}</textarea>
-    <button class="btn-planner primary" id="insp-save-meta-btn">SAVE META</button>
+    <div id="inspector-weather" class="weather-loading" style="margin-top:14px">Loading forecast…</div>
+    ${editable ? `
+    <button class="pt-btn" id="insp-edit-toggle" style="width:100%;margin-top:14px">✎ Edit details</button>
+    <div id="insp-edit-form" style="display:none;margin-top:10px">
+      <div style="display:flex;gap:6px;margin-bottom:8px">
+        <button class="pt-btn" id="insp-rename-btn">Rename</button>
+        <button class="pt-btn danger" id="insp-delete-btn">Delete</button>
+      </div>
+      <select class="search-input" id="insp-pavement" style="margin-bottom:6px">
+        <option value="">Pavement quality…</option>
+        <option value="pristine" ${meta.pavement === 'pristine' ? 'selected' : ''}>Pristine (rare)</option>
+        <option value="good" ${meta.pavement === 'good' ? 'selected' : ''}>Good</option>
+        <option value="rough" ${meta.pavement === 'rough' ? 'selected' : ''}>Rough parts</option>
+      </select>
+      <select class="search-input" id="insp-character" style="margin-bottom:6px">
+        <option value="">Character…</option>
+        <option value="flowing" ${meta.character === 'flowing' ? 'selected' : ''}>Flowing</option>
+        <option value="technical" ${meta.character === 'technical' ? 'selected' : ''}>Technical</option>
+        <option value="mixed" ${meta.character === 'mixed' ? 'selected' : ''}>Mixed</option>
+      </select>
+      <select class="search-input" id="insp-deer" style="margin-bottom:6px">
+        <option value="">Deer risk…</option>
+        <option value="low" ${meta.deer === 'low' ? 'selected' : ''}>Low</option>
+        <option value="medium" ${meta.deer === 'medium' ? 'selected' : ''}>Medium</option>
+        <option value="high" ${meta.deer === 'high' ? 'selected' : ''}>High</option>
+      </select>
+      <textarea class="search-input" id="insp-notes" placeholder="Notes" style="margin-bottom:6px;min-height:50px">${escapeHtml(meta.notes)}</textarea>
+      <button class="btn-planner primary" id="insp-save-meta-btn">SAVE META</button>
+    </div>` : ''}
     <button class="pt-btn" id="insp-back-btn" style="margin-top:10px;width:100%">← Back to Library</button>
-    ` : ''}
   `;
+}
+
+// Full weather panel: current conditions, the 6-stat grid, and the tonight
+// hour-by-hour strip with fog-risk dots (20:00–06:00).
+function weatherHtml(fc) {
+  const now = appState.now();
+  const H = fc.hourly;
+  const ni = H.time.findIndex(t => new Date(t) > now);
+  if (ni < 0) return '<div style="font-size:11px;color:var(--text3)">No forecast.</div>';
+  const temp = H.temperature_2m[ni], rh = H.relative_humidity_2m[ni], dew = H.dew_point_2m[ni];
+  const wind = H.windspeed_10m[ni], precip = H.precipitation_probability?.[ni] ?? 0, wcode = H.weathercode?.[ni];
+  const fs = calcFogScore(fc, now), fb = fogBadge(fs), spread = (temp - dew).toFixed(1);
+  const cells = [];
+  for (let i = 0; i < H.time.length; i++) {
+    const t = new Date(H.time[i]); if (t < now) continue;
+    const h = t.getHours(); if (h < 20 && h > 6) continue;
+    const fr = nightFogRisk(H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]);
+    cells.push(`<div class="hour-cell"><div class="htime">${String(h).padStart(2, '0')}h</div><div class="htemp">${Math.round(H.temperature_2m[i])}°</div><div class="hfog" style="background:${fogColor(fr)}"></div></div>`);
+    if (cells.length >= 14) break;
+  }
+  return `
+    <div class="weather-now">
+      <div class="weather-main"><div class="temp-big">${Math.round(temp)}°C</div><div class="weather-desc">${wmoDesc(wcode)}</div></div>
+      <span class="fog-badge ${fb.cls}">FOG: ${fb.lbl}</span>
+    </div>
+    <div class="weather-details">
+      <div class="w-detail"><div class="wlbl">Humidity</div><div class="wval">${Math.round(rh)}%</div></div>
+      <div class="w-detail"><div class="wlbl">Dew Point</div><div class="wval">${Math.round(dew)}°C</div></div>
+      <div class="w-detail"><div class="wlbl">Wind</div><div class="wval">${Math.round(wind)} km/h</div></div>
+      <div class="w-detail"><div class="wlbl">Rain Prob</div><div class="wval">${Math.round(precip)}%</div></div>
+      <div class="w-detail"><div class="wlbl">Dew Spread</div><div class="wval">${spread}°C</div></div>
+      <div class="w-detail"><div class="wlbl">Fog Score</div><div class="wval">${Math.round(fs)}/100</div></div>
+    </div>
+    <div class="hourly-title">Tonight 20:00–06:00 · dot = fog risk</div>
+    <div class="hourly-grid">${cells.join('') || '<span style="font-size:11px;color:var(--text3)">No night hours in window</span>'}</div>`;
 }
 
 async function fillInspectorWeather(road) {
@@ -251,26 +302,16 @@ async function fillInspectorWeather(road) {
   if (!mid) { el.textContent = 'No location data.'; return; }
   try {
     const fc = await appState.weatherClient.get(mid.lat, mid.lon);
-    const score = calcFogScore(fc, appState.now());
-    const badge = fogBadge(score);
-    const wcode = fc.hourly.weathercode?.[0];
-    const temp = fc.hourly.temperature_2m?.[0];
     el.className = '';
-    el.innerHTML = `
-      <div class="weather-now">
-        <div class="weather-main">
-          <div class="temp-big">${temp != null ? Math.round(temp) + '°' : '—'}</div>
-          <div class="weather-desc">${wcode != null ? wmoDesc(wcode) : ''}</div>
-        </div>
-        <span class="fog-badge ${badge.cls}">${badge.lbl} FOG RISK</span>
-      </div>`;
-  } catch {
-    el.textContent = 'Forecast unavailable.';
-  }
+    el.innerHTML = weatherHtml(fc);
+  } catch { el.textContent = 'Forecast unavailable.'; }
 }
 
 function wireInspectorEdit(road) {
-  document.getElementById('insp-back-btn')?.addEventListener('click', () => switchView('library'));
+  document.getElementById('insp-edit-toggle')?.addEventListener('click', () => {
+    const f = document.getElementById('insp-edit-form');
+    if (f) f.style.display = f.style.display === 'none' ? 'block' : 'none';
+  });
   document.getElementById('insp-rename-btn')?.addEventListener('click', () => {
     openNameModal({
       title: 'Rename road', value: road.name,
@@ -301,15 +342,29 @@ function wireInspectorEdit(road) {
   });
 }
 
+let homeLineLayer = null;
+function clearHomeLine() { if (homeLineLayer) { homeLineLayer.remove(); homeLineLayer = null; } }
+function showHomeLine(road) {
+  clearHomeLine();
+  const home = appState.data.home;
+  if (!home || !road?.points?.length) return;
+  const { point } = nearestPoint(home.lat, home.lon, road.points);
+  homeLineLayer = L.polyline([[home.lat, home.lon], [point.lat, point.lon]],
+    { color: '#3090e8', weight: 2, dashArray: '6,4', opacity: 0.75 }).addTo(map);
+}
+
 function wireRoadSelection() {
   onRoadSelect((road) => {
-    if (!road) { hideInspector(); return; }
-    const editable = isDesktop();
+    if (!road) { hideInspector(); clearHomeLine(); return; }
+    const editable = isDesktop() && !!appState.auth.token; // editor = writer with a token
     const html = roadInspectorHtml(road, editable);
-    if (editable) showInspector(html);
-    else openSheet(road.name, html, 'half');
+    if (isDesktop()) showInspector(html); else openSheet(road.name, html, 'half');
+    document.getElementById('insp-back-btn')?.addEventListener('click', () => {
+      if (isDesktop()) switchView('library'); else closeSheet();
+    });
     if (editable) wireInspectorEdit(road);
     fillInspectorWeather(road);
+    showHomeLine(road);
   });
 }
 
@@ -533,15 +588,7 @@ function wireMapClick() {
 }
 
 // ── BOOT ─────────────────────────────────────────────────────────────────────
-async function boot() {
-  initUi();
-  if (!map) initMap('map');
-
-  if (!appState.cfg) {
-    showOnboarding(appState, boot);
-    return;
-  }
-
+function wireChrome() {
   wireTabs();
   wireLayerToggle();
   wireMapClick();
@@ -551,29 +598,27 @@ async function boot() {
   const desktop = isDesktop();
   document.getElementById('planner-tools').style.display = desktop ? 'block' : 'none';
   document.getElementById('tab-discover').style.display = desktop ? '' : 'none';
-  if (desktop) {
-    wirePlannerUi();
-    wireDiscoverUi();
+  if (desktop) { wirePlannerUi(); wireDiscoverUi(); }
+
+  document.getElementById('settings-btn')?.addEventListener('click', () => promptUnlock());
+  document.getElementById('library-search')?.addEventListener('input', () => { if (currentView === 'library') refreshCurrentView(); });
+  document.getElementById('library-sort')?.addEventListener('change', () => { if (currentView === 'library') refreshCurrentView(); });
+  document.getElementById('tonight-refresh')?.addEventListener('click', () => { appState.weatherClient.clear(); if (currentView === 'tonight') refreshCurrentView(); });
+  document.getElementById('tonight-reachable-toggle')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
+  document.getElementById('tonight-reachable-min')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
+}
+
+// Read roads (decrypting if needed) and render. Returns true on success; on a
+// lock error it shows the unlock screen and returns false.
+async function loadAndRender() {
+  try {
+    appState.data = await readRoads(appState.auth);
+  } catch (e) {
+    if (e.code === 'BAD_PASSPHRASE') { promptUnlock('Wrong passphrase — try again'); return false; }
+    if (e.code === 'ENCRYPTED_NO_PASS') { promptUnlock(); return false; }
+    appState.data = { version: 2, home: null, roads: [] }; // unknown error → empty, let them proceed
   }
-
-  document.getElementById('library-search')?.addEventListener('input', () => {
-    if (currentView === 'library') refreshCurrentView();
-  });
-  document.getElementById('library-sort')?.addEventListener('change', () => {
-    if (currentView === 'library') refreshCurrentView();
-  });
-  document.getElementById('tonight-refresh')?.addEventListener('click', () => {
-    appState.weatherClient.clear();
-    if (currentView === 'tonight') refreshCurrentView();
-  });
-  document.getElementById('tonight-reachable-toggle')?.addEventListener('change', () => {
-    if (currentView === 'tonight') refreshCurrentView();
-  });
-  document.getElementById('tonight-reachable-min')?.addEventListener('change', () => {
-    if (currentView === 'tonight') refreshCurrentView();
-  });
-
-  appState.data = await readRoads(appState.cfg);
+  hideOnboarding();
   renderSavedRoads(appState);
   if (appState.data.home) {
     renderHomeMarker(appState.data.home, (lat, lon) => {
@@ -583,8 +628,40 @@ async function boot() {
     });
     updateHomeLabel(appState.data.home);
   }
-
   switchView('library');
+  return true;
+}
+
+// The unlock / credentials screen: passphrase (to decrypt) + token (desktop, to
+// write). On submit, persist, reload, and — if a writer just set a passphrase —
+// encrypt the file immediately so it's never left readable in the public repo.
+function promptUnlock(message) {
+  showUnlock({
+    message,
+    desktop: isDesktop(),
+    hasToken: !!appState.auth.token,
+    onSubmit: async ({ passphrase, token }) => {
+      appState.auth = {
+        passphrase: passphrase || null,
+        token: (isDesktop() ? (token || appState.auth.token) : appState.auth.token) || null
+      };
+      savePassphrase(appState.auth.passphrase);
+      if (isDesktop()) saveToken(appState.auth.token);
+      const ok = await loadAndRender();
+      if (ok && isDesktop() && appState.auth.token && appState.auth.passphrase) {
+        try { await writeRoads(appState.auth, appState.data); } // encrypt-in-place if it was plaintext
+        catch (err) { console.warn('encrypt-on-unlock write failed:', err?.message || err); }
+      }
+    }
+  });
+}
+
+async function boot() {
+  initUi();
+  if (!map) initMap('map');
+  wireChrome();
+  if (!appState.auth.passphrase) { promptUnlock(); return; } // passphrase = the "password to open"
+  await loadAndRender();
 }
 
 boot();

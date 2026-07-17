@@ -3,7 +3,7 @@
 // module renders no road/weather data itself — app.js hands it HTML strings
 // or containers to fill. Ported: bottom sheet drag logic from v1 L2343-2401.
 
-import { saveConfig, testConnection } from './sync.js';
+// (No sync imports: app.js owns persistence; this module just collects input.)
 
 export function isDesktop() {
   return matchMedia('(min-width: 769px)').matches;
@@ -140,63 +140,40 @@ function wireModal() {
   document.getElementById('name-modal-cancel')?.addEventListener('click', closeNameModal);
 }
 
-// ── ONBOARDING ───────────────────────────────────────────────────────────────
-// Collects owner/repo/branch/path (+ optional token, desktop-only) and calls
-// saveConfig(), then invokes onDone() so app.js can re-boot with the new cfg.
-// Never logs or persists the token anywhere but localStorage via saveConfig.
-export function showOnboarding(appState, onDone) {
+// ── UNLOCK / CREDENTIALS ─────────────────────────────────────────────────────
+// The "password to open the app": a passphrase (to decrypt the roads) and, on a
+// desktop editor, an optional GitHub token (to save/edit). This module only
+// COLLECTS the values and hands them to onSubmit — app.js persists them and
+// reloads. Nothing is logged; the token/passphrase are stored only by app.js
+// via sync.js localStorage helpers.
+export function showUnlock({ message = '', desktop = false, hasToken = false, onSubmit }) {
   const overlay = document.getElementById('onboard');
   overlay.style.display = 'flex';
 
-  // Token is only meaningful for writing (desktop draws/saves roads); hide
-  // the field on phones to avoid inviting users to paste a PAT on mobile.
-  document.getElementById('ob-token-row').style.display = isDesktop() ? 'block' : 'none';
+  const errEl = document.getElementById('ob-error');
+  errEl.textContent = message || '';
+  errEl.style.display = message ? 'block' : 'none';
+
+  document.getElementById('ob-token-row').style.display = desktop ? 'block' : 'none';
+  const tokenNote = document.getElementById('ob-token-note');
+  if (tokenNote) tokenNote.textContent = hasToken ? 'Token already set — leave blank to keep it.' : '';
+
+  const passEl = document.getElementById('ob-pass');
+  passEl.value = '';
+  setTimeout(() => passEl.focus(), 50);
 
   const form = document.getElementById('onboard-form');
-  const errEl = document.getElementById('ob-error');
-
-  const handler = async (e) => {
+  form.onsubmit = async (e) => {   // assign (not addEventListener) so re-shows don't stack handlers
     e.preventDefault();
-    errEl.style.display = 'none';
-    const owner = document.getElementById('ob-owner').value.trim();
-    const repo = document.getElementById('ob-repo').value.trim();
-    const branch = document.getElementById('ob-branch').value.trim() || 'main';
-    const path = document.getElementById('ob-path').value.trim() || 'roads.json';
-    const token = isDesktop() ? document.getElementById('ob-token').value.trim() : '';
-
-    if (!owner || !repo) {
-      errEl.textContent = 'Owner and repo are required.';
-      errEl.style.display = 'block';
-      return;
-    }
-
-    const cfg = { owner, repo, branch, path };
-    if (token) cfg.token = token;
-
+    const passphrase = passEl.value;
+    const token = desktop ? document.getElementById('ob-token').value.trim() : '';
+    if (!passphrase) { errEl.textContent = 'Passphrase required.'; errEl.style.display = 'block'; return; }
     const submitBtn = document.getElementById('ob-submit');
-    const originalLabel = submitBtn ? submitBtn.textContent : '';
-    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Testing…'; }
-
-    let result;
-    try {
-      result = await testConnection(cfg);
-    } finally {
-      if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = originalLabel; }
-    }
-
-    if (!result.ok) {
-      errEl.textContent = result.message || 'Could not connect to GitHub.';
-      errEl.style.display = 'block';
-      return;
-    }
-
-    saveConfig(cfg);
-    appState.cfg = cfg;
-    form.removeEventListener('submit', handler);
-    overlay.style.display = 'none';
-    onDone();
+    const label = submitBtn ? submitBtn.textContent : '';
+    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Unlocking…'; }
+    try { await onSubmit({ passphrase, token }); }
+    finally { if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = label; } }
   };
-  form.addEventListener('submit', handler);
 }
 
 export function hideOnboarding() {
