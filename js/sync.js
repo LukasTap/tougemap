@@ -39,8 +39,7 @@ export async function readRoads(cfg, { fetchFn = defaultFetch } = {}) {
 
 async function currentSha(cfg, fetchFn) {
   const url = `${API}/repos/${cfg.owner}/${cfg.repo}/contents/${cfg.path}?ref=${cfg.branch}`;
-  const res = await fetchFn(url, { headers: { Authorization: `Bearer ${cfg.token}` } });
-  if (res.status === 404) return null;      // file doesn't exist yet
+  const res = await fetchFn(url, { headers: { Authorization: `Bearer ${cfg.token}` }, cache: 'no-store' });  if (res.status === 404) return null;
   if (!res.ok) throw new Error('sha ' + res.status);
   return (await res.json()).sha;
 }
