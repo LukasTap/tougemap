@@ -140,39 +140,65 @@ function wireModal() {
   document.getElementById('name-modal-cancel')?.addEventListener('click', closeNameModal);
 }
 
-// ── UNLOCK / CREDENTIALS ─────────────────────────────────────────────────────
-// The "password to open the app": a passphrase (to decrypt the roads) and, on a
-// desktop editor, an optional GitHub token (to save/edit). This module only
-// COLLECTS the values and hands them to onSubmit — app.js persists them and
-// reloads. Nothing is logged; the token/passphrase are stored only by app.js
-// via sync.js localStorage helpers.
-export function showUnlock({ message = '', desktop = false, hasToken = false, onSubmit }) {
-  const overlay = document.getElementById('onboard');
-  overlay.style.display = 'flex';
+// ── UNLOCK (decrypt) & SETTINGS (token / set-passphrase) ─────────────────────
+// This module only COLLECTS input and hands it to onSubmit — app.js persists and
+// (re)encrypts. Nothing is logged. Two modes share the #onboard overlay.
+const $ = (id) => document.getElementById(id);
 
-  const errEl = document.getElementById('ob-error');
-  errEl.textContent = message || '';
-  errEl.style.display = message ? 'block' : 'none';
+function runSubmit(fn) {
+  const btn = $('ob-submit');
+  const label = btn ? btn.textContent : '';
+  if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
+  return Promise.resolve().then(fn).finally(() => { if (btn) { btn.disabled = false; btn.textContent = label; } });
+}
 
-  document.getElementById('ob-token-row').style.display = desktop ? 'block' : 'none';
-  const tokenNote = document.getElementById('ob-token-note');
-  if (tokenNote) tokenNote.textContent = hasToken ? 'Token already set — leave blank to keep it.' : '';
-
-  const passEl = document.getElementById('ob-pass');
-  passEl.value = '';
-  setTimeout(() => passEl.focus(), 50);
-
-  const form = document.getElementById('onboard-form');
-  form.onsubmit = async (e) => {   // assign (not addEventListener) so re-shows don't stack handlers
+// UNLOCK: one passphrase field. Shown only when the file is encrypted and we
+// lack (or have the wrong) passphrase. A wrong passphrase must FAIL to decrypt —
+// there is no silent pass-through here.
+export function showUnlock({ message = '', onSubmit }) {
+  $('onboard').style.display = 'flex';
+  $('ob-subtitle').textContent = '// unlock';
+  $('ob-desc').textContent = 'Enter your passphrase to unlock your roads. It decrypts them in your browser.';
+  $('ob-pass-label').textContent = 'Passphrase';
+  $('ob-pass2-row').style.display = 'none';
+  $('ob-token-row').style.display = 'none';
+  $('ob-cancel').style.display = 'none';
+  $('ob-submit').textContent = 'UNLOCK';
+  const errEl = $('ob-error');
+  errEl.textContent = message || ''; errEl.style.display = message ? 'block' : 'none';
+  const passEl = $('ob-pass'); passEl.value = ''; setTimeout(() => passEl.focus(), 50);
+  $('onboard-form').onsubmit = (e) => {
     e.preventDefault();
     const passphrase = passEl.value;
-    const token = desktop ? document.getElementById('ob-token').value.trim() : '';
     if (!passphrase) { errEl.textContent = 'Passphrase required.'; errEl.style.display = 'block'; return; }
-    const submitBtn = document.getElementById('ob-submit');
-    const label = submitBtn ? submitBtn.textContent : '';
-    if (submitBtn) { submitBtn.disabled = true; submitBtn.textContent = 'Unlocking…'; }
-    try { await onSubmit({ passphrase, token }); }
-    finally { if (submitBtn) { submitBtn.disabled = false; submitBtn.textContent = label; } }
+    return runSubmit(() => onSubmit({ passphrase }));
+  };
+}
+
+// SETTINGS: token + (optional) set/CHANGE passphrase, confirmed by re-typing so a
+// typo can't silently lock you out. Cancelable. Opened from the 🔑 button.
+export function showSettings({ hasToken = false, hasPassphrase = false, onSubmit, onCancel }) {
+  $('onboard').style.display = 'flex';
+  $('ob-subtitle').textContent = '// settings';
+  $('ob-desc').innerHTML = hasPassphrase
+    ? 'Update your GitHub token, or change your passphrase (re-encrypts your roads).'
+    : 'Add your GitHub token to save, and set a passphrase to <b>encrypt</b> your roads.';
+  $('ob-pass-label').textContent = hasPassphrase ? 'New passphrase (blank = keep current)' : 'Passphrase (encrypts your roads)';
+  $('ob-pass2-row').style.display = 'block';
+  $('ob-token-row').style.display = 'block';
+  $('ob-cancel').style.display = '';
+  $('ob-submit').textContent = 'SAVE';
+  const note = $('ob-token-note'); if (note) note.textContent = hasToken ? 'Token already set — blank keeps it.' : '';
+  const errEl = $('ob-error'); errEl.textContent = ''; errEl.style.display = 'none';
+  const passEl = $('ob-pass'), pass2El = $('ob-pass2'), tokEl = $('ob-token');
+  passEl.value = ''; pass2El.value = ''; tokEl.value = '';
+  setTimeout(() => tokEl.focus(), 50);
+  $('ob-cancel').onclick = () => { hideOnboarding(); if (onCancel) onCancel(); };
+  $('onboard-form').onsubmit = (e) => {
+    e.preventDefault();
+    const passphrase = passEl.value, passphrase2 = pass2El.value, token = tokEl.value.trim();
+    if (passphrase && passphrase !== passphrase2) { errEl.textContent = 'Passphrases don’t match.'; errEl.style.display = 'block'; return; }
+    return runSubmit(() => onSubmit({ passphrase, token }));
   };
 }
 

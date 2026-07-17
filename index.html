@@ -203,23 +203,30 @@
     </div>
   </div>
 
-  <!-- UNLOCK / CREDENTIALS -->
+  <!-- UNLOCK (decrypt) / SETTINGS (token + set/change passphrase) -->
   <div id="onboard" style="display:none">
     <div class="box">
-      <div id="logo" style="margin-bottom:8px">TOUGEMAP<span>// unlock</span></div>
-      <p style="font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:16px">Enter your passphrase to unlock your roads. Your data is encrypted — this passphrase decrypts it in your browser.</p>
+      <div id="logo" style="margin-bottom:8px">TOUGEMAP<span id="ob-subtitle">// unlock</span></div>
+      <p id="ob-desc" style="font-size:11px;color:var(--text3);line-height:1.5;margin-bottom:16px"></p>
       <form id="onboard-form">
-        <div style="margin-bottom:10px">
-          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Passphrase</label>
-          <input class="search-input" id="ob-pass" type="password" autocomplete="off" required>
+        <div id="ob-pass-row" style="margin-bottom:10px">
+          <label id="ob-pass-label" style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Passphrase</label>
+          <input class="search-input" id="ob-pass" type="password" autocomplete="off">
         </div>
-        <div id="ob-token-row" style="margin-bottom:10px">
+        <div id="ob-pass2-row" style="margin-bottom:10px;display:none">
+          <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">Confirm passphrase</label>
+          <input class="search-input" id="ob-pass2" type="password" autocomplete="off">
+        </div>
+        <div id="ob-token-row" style="margin-bottom:10px;display:none">
           <label style="font-size:11px;color:var(--text2);display:block;margin-bottom:4px">GitHub token — only needed on this PC to save/edit</label>
           <input class="search-input" id="ob-token" type="password" autocomplete="off">
           <div id="ob-token-note" style="font-size:10px;color:var(--text3);margin-top:4px"></div>
         </div>
         <div id="ob-error" style="display:none;color:var(--red);font-size:11px;margin-bottom:10px"></div>
-        <button type="submit" class="btn-planner primary" id="ob-submit">UNLOCK</button>
+        <div style="display:flex;gap:8px">
+          <button type="submit" class="btn-planner primary" id="ob-submit" style="flex:1">UNLOCK</button>
+          <button type="button" class="btn-planner secondary" id="ob-cancel" style="flex:0 0 auto;display:none">Cancel</button>
+        </div>
       </form>
     </div>
   </div>
