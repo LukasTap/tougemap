@@ -14,11 +14,11 @@ import {
   deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker,
   onHomeChange
 } from './planner.js';
-import { nearestPoint } from './routing.js';
+import { nearestPoint, route } from './routing.js';
 import { buildOverpassQuery, fetchOverpass, joinAndScore, curvColor, fogColor } from './curvature.js';
 import {
   isDesktop, showView, showInspector, hideInspector, openSheet, closeSheet,
-  openNameModal, showUnlock, hideOnboarding, setDiscoverStatus, initUi
+  openNameModal, showUnlock, showSettings, hideOnboarding, setDiscoverStatus, initUi
 } from './ui.js';
 
 export const appState = {
@@ -274,8 +274,8 @@ function weatherHtml(fc) {
   for (let i = 0; i < H.time.length; i++) {
     const t = new Date(H.time[i]); if (t < now) continue;
     const h = t.getHours(); if (h < 20 && h > 6) continue;
-    const fr = nightFogRisk(H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]);
-    cells.push(`<div class="hour-cell"><div class="htime">${String(h).padStart(2, '0')}h</div><div class="htemp">${Math.round(H.temperature_2m[i])}°</div><div class="hfog" style="background:${fogColor(fr)}"></div></div>`);
+    const fr = Math.round(nightFogRisk(H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]));
+    cells.push(`<div class="hour-cell" title="Fog risk ${fr}%"><div class="htime">${String(h).padStart(2, '0')}h</div><div class="htemp">${Math.round(H.temperature_2m[i])}°</div><div class="hfog" style="background:${fogColor(fr)}"></div><div class="hfog-pct">${fr}</div></div>`);
     if (cells.length >= 14) break;
   }
   return `
@@ -343,14 +343,24 @@ function wireInspectorEdit(road) {
 }
 
 let homeLineLayer = null;
+let homeLineToken = 0; // guards against a slow route reply overwriting a newer selection
 function clearHomeLine() { if (homeLineLayer) { homeLineLayer.remove(); homeLineLayer = null; } }
-function showHomeLine(road) {
+async function showHomeLine(road) {
   clearHomeLine();
   const home = appState.data.home;
   if (!home || !road?.points?.length) return;
+  const myToken = ++homeLineToken;
   const { point } = nearestPoint(home.lat, home.lon, road.points);
+  // Faint straight placeholder while the actual road route loads.
   homeLineLayer = L.polyline([[home.lat, home.lon], [point.lat, point.lon]],
-    { color: '#3090e8', weight: 2, dashArray: '6,4', opacity: 0.75 }).addTo(map);
+    { color: '#3090e8', weight: 2, dashArray: '4,6', opacity: 0.4 }).addTo(map);
+  try {
+    const r = await route([home, point]); // OSRM route home → nearest point of the road (follows roads)
+    if (myToken !== homeLineToken) return; // superseded by a newer selection
+    clearHomeLine();
+    homeLineLayer = L.polyline(r.points.map(p => [p.lat, p.lon]),
+      { color: '#3090e8', weight: 3, dashArray: '6,5', opacity: 0.8 }).addTo(map);
+  } catch { /* routing down — keep the straight placeholder */ }
 }
 
 function wireRoadSelection() {
@@ -600,7 +610,7 @@ function wireChrome() {
   document.getElementById('tab-discover').style.display = desktop ? '' : 'none';
   if (desktop) { wirePlannerUi(); wireDiscoverUi(); }
 
-  document.getElementById('settings-btn')?.addEventListener('click', () => promptUnlock());
+  document.getElementById('settings-btn')?.addEventListener('click', () => openSettings());
   document.getElementById('library-search')?.addEventListener('input', () => { if (currentView === 'library') refreshCurrentView(); });
   document.getElementById('library-sort')?.addEventListener('change', () => { if (currentView === 'library') refreshCurrentView(); });
   document.getElementById('tonight-refresh')?.addEventListener('click', () => { appState.weatherClient.clear(); if (currentView === 'tonight') refreshCurrentView(); });
@@ -632,26 +642,41 @@ async function loadAndRender() {
   return true;
 }
 
-// The unlock / credentials screen: passphrase (to decrypt) + token (desktop, to
-// write). On submit, persist, reload, and — if a writer just set a passphrase —
-// encrypt the file immediately so it's never left readable in the public repo.
+// UNLOCK: only shown when the file is encrypted and we can't decrypt it. Saves
+// the passphrase and re-reads. A wrong passphrase fails to decrypt → we come
+// straight back here with an error. No silent encryption happens here.
 function promptUnlock(message) {
   showUnlock({
     message,
-    desktop: isDesktop(),
-    hasToken: !!appState.auth.token,
-    onSubmit: async ({ passphrase, token }) => {
-      appState.auth = {
-        passphrase: passphrase || null,
-        token: (isDesktop() ? (token || appState.auth.token) : appState.auth.token) || null
-      };
+    onSubmit: async ({ passphrase }) => {
+      appState.auth = { ...appState.auth, passphrase: passphrase || null };
       savePassphrase(appState.auth.passphrase);
-      if (isDesktop()) saveToken(appState.auth.token);
-      const ok = await loadAndRender();
-      if (ok && isDesktop() && appState.auth.token && appState.auth.passphrase) {
-        try { await writeRoads(appState.auth, appState.data); } // encrypt-in-place if it was plaintext
-        catch (err) { console.warn('encrypt-on-unlock write failed:', err?.message || err); }
+      await loadAndRender();
+    }
+  });
+}
+
+// SETTINGS (🔑): set the write token and/or set/change the passphrase. Setting a
+// passphrase (confirmed) is the ONLY way roads get encrypted — an explicit,
+// deliberate action, never a silent side effect of unlocking. Changing it
+// re-encrypts the in-memory (already-decrypted) data with the new passphrase.
+function openSettings() {
+  showSettings({
+    hasToken: !!appState.auth.token,
+    hasPassphrase: !!appState.auth.passphrase,
+    onCancel: () => {},
+    onSubmit: async ({ passphrase, token }) => {
+      if (token) { appState.auth = { ...appState.auth, token }; saveToken(token); }
+      const changingPass = !!passphrase;
+      if (changingPass) { appState.auth = { ...appState.auth, passphrase }; savePassphrase(passphrase); }
+      hideOnboarding();
+      // If a passphrase was set/changed and we can write, (re)encrypt now so the
+      // repo reflects it immediately — with confirmation already done, no surprise.
+      if (changingPass && appState.auth.token) {
+        try { await writeRoads(appState.auth, appState.data); }
+        catch (err) { alert('Could not save encrypted roads: ' + (err?.message || err)); }
       }
+      refreshCurrentView();
     }
   });
 }
@@ -660,8 +685,7 @@ async function boot() {
   initUi();
   if (!map) initMap('map');
   wireChrome();
-  if (!appState.auth.passphrase) { promptUnlock(); return; } // passphrase = the "password to open"
-  await loadAndRender();
+  await loadAndRender(); // plaintext loads with no prompt; encrypted+locked shows unlock
 }
 
 boot();
