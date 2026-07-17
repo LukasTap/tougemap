@@ -7,13 +7,15 @@
 import { map, savedGroup } from './map.js';
 import { route, nearestPoint, airFallback } from './routing.js';
 import { polylineKm } from './geo.js';
-import { writeRoads, loadConfig } from './sync.js';
+import { writeRoads, loadAuth } from './sync.js';
 import { normalizeRoad } from './store.js';
 
 const SAVED_COLOR = '#b000ff'; // saved roads always render deep purple (no per-road color in v2)
 
+// Auth for writes: { token, passphrase } — token authorizes the commit,
+// passphrase encrypts the payload (both handled inside writeRoads).
 function getCfg(appState) {
-  return appState.cfg || loadConfig();
+  return appState.auth || loadAuth();
 }
 
 // Guards every write path against a doomed network attempt while offline (spec §3.3).

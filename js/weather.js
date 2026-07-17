@@ -40,6 +40,14 @@ export function wmoDesc(c) {
   return 'Thunderstorm';
 }
 
+// Per-hour fog-risk (0–100) for the "tonight" hourly strip dots.
+export function nightFogRisk(spread, rh, wind) {
+  let fr = spread <= 1 ? 80 : spread <= 2 ? 50 : spread <= 4 ? 25 : 10;
+  if (rh > 90) fr = Math.min(100, fr + 20);
+  if (wind < 5) fr = Math.min(100, fr + 10);
+  return fr;
+}
+
 const HOURLY = 'temperature_2m,relative_humidity_2m,dew_point_2m,precipitation_probability,weathercode,windspeed_10m';
 
 export function createWeatherClient({ fetchFn = (u, o) => fetchWithTimeout(u, o, 12000), now = () => new Date(), ttlMs = 30 * 60 * 1000 } = {}) {
