@@ -17859,10 +17859,10 @@
         }
       },
       "meta": {
-        "pavement": null,
-        "character": null,
-        "deer": null,
-        "notes": ""
+        "pavement": "good",
+        "character": "technical",
+        "deer": "medium",
+        "notes": "test 4 desc"
       }
     }
   ]
