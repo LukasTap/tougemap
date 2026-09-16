@@ -41,11 +41,16 @@ export function thumbnailSvg(points) {
   return `<svg class="road-thumb" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none"><path d="${d}"/></svg>`;
 }
 
+// Ranked hazards first, coloured, each carrying an icon so the word does not
+// have to name its own dimension — "patchy" next to "flowing" used to leave you
+// working out which chip was the surface. Character comes last and uncoloured:
+// it is the one tag that says why you would GO, not what could go wrong, and
+// dressing it like a rank implied an order it does not have.
 export function metaChipsHtml(meta) {
   const chips = [];
-  if (meta.character) chips.push(`<span class="meta-chip">${meta.character}</span>`);
-  if (meta.pavement)  chips.push(`<span class="meta-chip">${meta.pavement}</span>`);
+  if (meta.pavement)  chips.push(`<span class="meta-chip pave-${meta.pavement}">🛣 ${meta.pavement}</span>`);
   if (meta.deer)      chips.push(`<span class="meta-chip deer-${meta.deer}">🦌 ${meta.deer}</span>`);
+  if (meta.character) chips.push(`<span class="meta-chip chip-kind">${meta.character}</span>`);
   return chips.join('');
 }
 

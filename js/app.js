@@ -7,7 +7,7 @@ import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGr
 import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
 import {
   createWeatherClient, wmoDesc, nightHours, nightGroups, nightExtremes, decisionHours,
-  tonightRisks, buildNightChart, axisLabelIndices, DRIVE_FROM, DRIVE_TO
+  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, DRIVE_FROM, DRIVE_TO
 } from './weather.js';
 import { rankRoads, reachable } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
@@ -32,6 +32,7 @@ export const appState = {
 };
 
 let currentView = 'library';
+const VIEW_NAMES = { library: 'Library', tonight: 'Tonight', nearme: 'Near Me', discover: 'Discover' };
 let placingHome = false;
 
 // ── DISCOVER IN-MEMORY + INDEXEDDB CACHE (separate DB from store.js's roads
@@ -237,10 +238,11 @@ function roadInspectorHtml(road, editable) {
         <button class="pt-btn danger" id="insp-delete-btn">Delete</button>
       </div>
       <select class="search-input" id="insp-pavement" style="margin-bottom:6px">
-        <option value="">Pavement quality…</option>
-        <option value="pristine" ${meta.pavement === 'pristine' ? 'selected' : ''}>Pristine (rare)</option>
-        <option value="good" ${meta.pavement === 'good' ? 'selected' : ''}>Good</option>
-        <option value="rough" ${meta.pavement === 'rough' ? 'selected' : ''}>Rough parts</option>
+        <option value="">Surface…</option>
+        <option value="glass" ${meta.pavement === 'glass' ? 'selected' : ''}>Glass — flawless, rare</option>
+        <option value="smooth" ${meta.pavement === 'smooth' ? 'selected' : ''}>Smooth — minor blemishes at most</option>
+        <option value="patchy" ${meta.pavement === 'patchy' ? 'selected' : ''}>Patchy — some bad sections</option>
+        <option value="broken" ${meta.pavement === 'broken' ? 'selected' : ''}>Broken — has to be read and avoided</option>
       </select>
       <select class="search-input" id="insp-character" style="margin-bottom:6px">
         <option value="">Character…</option>
@@ -249,15 +251,15 @@ function roadInspectorHtml(road, editable) {
         <option value="mixed" ${meta.character === 'mixed' ? 'selected' : ''}>Mixed</option>
       </select>
       <select class="search-input" id="insp-deer" style="margin-bottom:6px">
-        <option value="">Deer risk…</option>
-        <option value="low" ${meta.deer === 'low' ? 'selected' : ''}>Low</option>
-        <option value="medium" ${meta.deer === 'medium' ? 'selected' : ''}>Medium</option>
-        <option value="high" ${meta.deer === 'high' ? 'selected' : ''}>High</option>
+        <option value="">Deer…</option>
+        <option value="rare" ${meta.deer === 'rare' ? 'selected' : ''}>Rare</option>
+        <option value="some" ${meta.deer === 'some' ? 'selected' : ''}>Some</option>
+        <option value="heavy" ${meta.deer === 'heavy' ? 'selected' : ''}>Heavy</option>
       </select>
       <textarea class="search-input" id="insp-notes" placeholder="Notes" style="margin-bottom:6px;min-height:50px">${escapeHtml(meta.notes)}</textarea>
       <button class="btn-planner primary" id="insp-save-meta-btn">SAVE META</button>
     </div>` : ''}
-    <button class="pt-btn" id="insp-back-btn" style="margin-top:10px;width:100%">← Back to Library</button>
+    <button class="pt-btn" id="insp-back-btn" style="margin-top:10px;width:100%">← Back to ${VIEW_NAMES[currentView] || 'list'}</button>
   `;
 }
 
@@ -279,9 +281,10 @@ function nightChartHtml(chart) {
   const { geom, segments, ticks, breaks, temp } = chart;
   const tickMarks = ticks.map(x =>
     `<line class="nc-tick" x1="${x}" y1="${geom.tmpBase}" x2="${x}" y2="${geom.tickEnd}"/>`).join('');
+  // No "day" caption under the rule: it landed in the same band as the hour
+  // labels and read as debris. Two labelled nights either side of a gap say it.
   const breakMarks = breaks.map(x =>
-    `<line class="nc-break" x1="${x}" y1="0" x2="${x}" y2="${geom.tickEnd}"/>` +
-    `<text class="nc-break-lbl" x="${x}" y="${geom.h - 4}" text-anchor="middle">day</text>`).join('');
+    `<line class="nc-break" x1="${x}" y1="0" x2="${x}" y2="${geom.tickEnd}"/>`).join('');
   // Drawn first, behind everything: the stretch actually driven. A neutral lift
   // rather than another colour — every hue on this chart already means something.
   const driveBand = segments.map(s => s.drive
@@ -289,6 +292,11 @@ function nightChartHtml(chart) {
        <line class="nc-drive-edge" x1="${s.drive.x0}" y1="0" x2="${s.drive.x0}" y2="${geom.tickEnd}"/>
        <line class="nc-drive-edge" x1="${s.drive.x1}" y1="0" x2="${s.drive.x1}" y2="${geom.tickEnd}"/>`
     : '').join('');
+  // Temperature needs a readable scale of its own — without it the curve only
+  // says "down, and white at the bottom".
+  const tmpGrid = temp.ticks.map(t =>
+    `<line class="nc-tmp-grid" x1="0" y1="${t.y}" x2="${geom.w}" y2="${t.y}"/>` +
+    `<text class="nc-tmp-lbl" x="${geom.w}" y="${t.y - 2}" text-anchor="end">${t.v}°</text>`).join('');
   const bands =
     (temp.frostHeight > 0 ? `<rect class="nc-frost" x="0" y="${temp.frostY}" width="${geom.w}" height="${temp.frostHeight}"/>` : '') +
     (temp.iceHeight > 0 ? `<rect class="nc-ice" x="0" y="${temp.freezeY}" width="${geom.w}" height="${temp.iceHeight}"/>` : '') +
@@ -330,6 +338,7 @@ function nightChartHtml(chart) {
       </defs>
       ${driveBand}
       ${bands}
+      ${tmpGrid}
       ${tickMarks}
       ${plots}
       ${breakMarks}
@@ -346,13 +355,28 @@ function nightChartHtml(chart) {
 const CHAR_W = 7.2;     // Space Mono at 9px with the uppercase letter-spacing
 
 function axisHtml(segments, hourW) {
+  // Thin the labels ACROSS the whole axis, not per night. Each night picks its
+  // own first, but the gap is only 12 units wide — so one night's 06 and the
+  // next night's 20 are centred barely a label apart and run together. Walking
+  // the union in x order drops the second of any such pair.
+  let lastX = -Infinity;
+  const perSeg = segments.map((s) => {
+    const kept = [];
+    for (const k of axisLabelIndices(s.hours, hourW)) {
+      const x = s.x0 + k * hourW;
+      if (x - lastX < LABEL_W) continue;
+      lastX = x;
+      kept.push(k);
+    }
+    return kept;
+  });
+
   return segments.map((s, i) => {
     const n = s.hours.length;
     const span = Math.max(1, n - 1) * hourW;
-    const marks = axisLabelIndices(s.hours, hourW).map(k => {
+    const marks = perSeg[i].map(k => {
       const pct = n < 2 ? 50 : (k / (n - 1)) * 100;
-      const shift = k === 0 ? '0' : k === n - 1 ? '-100%' : '-50%';
-      return `<span style="left:${pct.toFixed(1)}%;transform:translateX(${shift})">${hh(s.hours[k].hour)}h</span>`;
+      return `<span style="left:${pct.toFixed(1)}%">${hh(s.hours[k].hour)}</span>`;
     }).join('');
     // The night's name is dropped rather than left to collide with the next
     // one; position and the neighbour's name still identify it.
@@ -478,9 +502,10 @@ function wireRoadSelection() {
     const editable = isDesktop() && !!appState.auth.token; // editor = writer with a token
     const html = roadInspectorHtml(road, editable);
     if (isDesktop()) showInspector(html); else openSheet(road.name, html, 'half');
-    document.getElementById('insp-back-btn')?.addEventListener('click', () => {
-      if (isDesktop()) switchView('library'); else closeSheet();
-    });
+    // Back re-renders the list you came from. On mobile this used to call
+    // closeSheet(), which only collapsed the sheet to a peek — the inspector was
+    // still inside it, so the button appeared to do nothing but shrink things.
+    document.getElementById('insp-back-btn')?.addEventListener('click', () => switchView(currentView));
     if (editable) wireInspectorEdit(road);
     fillInspectorWeather(road);
     showHomeLine(road);

@@ -86,12 +86,19 @@ export function initSheetDrag() {
   // A tap on ✕ must close the sheet, not start a drag.
   const onCloseBtn = (e) => !!(e.target?.closest?.('#sheet-close-btn'));
 
+  // Resting offsets, in px, matching the CSS: the sheet is 75vh tall, `half`
+  // translates it 40% of itself (= 30vh) and `peek` all but the 56px header.
+  const restOffset = (state) => {
+    const h = window.innerHeight * 0.75;
+    if (state === 'open') return 0;
+    if (state === 'half') return h * 0.4;
+    return h - 56;
+  };
+
   const onStart = (y) => { startY = y; sheet.style.transition = 'none'; };
   const onMove = (y) => {
     const dy = y - startY;
-    const current = sheet.className;
-    const base = current === 'open' ? 0 : current === 'half' ? window.innerHeight * 0.4 : window.innerHeight - 56;
-    const newY = Math.max(0, Math.min(window.innerHeight * 0.85, base + dy));
+    const newY = Math.max(0, Math.min(restOffset('peek'), restOffset(sheet.className) + dy));
     sheet.style.transform = `translateY(${newY}px)`;
   };
   const onEnd = (y) => {

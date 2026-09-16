@@ -4,6 +4,30 @@ import { polylineKm } from './geo.js';
 export const SCHEMA_VERSION = 2;
 export const META_DEFAULT = { pavement: null, character: null, deer: null, notes: '' };
 
+// Tag vocabularies, best-first. Surface and deer are RANKED — the order here is
+// the order of the colour ramp. Character is not ranked: it says what a road is
+// like to drive, not what is wrong with it.
+export const PAVEMENT_TIERS = ['glass', 'smooth', 'patchy', 'broken'];
+export const DEER_TIERS = ['rare', 'some', 'heavy'];
+export const CHARACTER_KINDS = ['flowing', 'technical', 'mixed'];
+
+// v1 → v2 tag words, mapped by RANK rather than by dictionary meaning.
+// "Rough parts" always meant *some* bad sections, which is exactly `patchy`;
+// mapping it to `broken` would have libelled every decent road. `broken` is a
+// genuinely new bottom tier and nothing migrates into it.
+const PAVEMENT_V1 = { pristine: 'glass', good: 'smooth', rough: 'patchy' };
+const DEER_V1 = { low: 'rare', medium: 'some', high: 'heavy' };
+
+// Idempotent: a value already in the new vocabulary is not in the map and falls
+// straight through, so this can run on every read.
+export function migrateMeta(meta) {
+  return {
+    ...meta,
+    pavement: meta.pavement ? (PAVEMENT_V1[meta.pavement] ?? meta.pavement) : null,
+    deer: meta.deer ? (DEER_V1[meta.deer] ?? meta.deer) : null
+  };
+}
+
 export function emptyData() {
   return { version: 2, home: null, roads: [] };
 }
@@ -17,7 +41,7 @@ export function normalizeRoad(r) {
     km: typeof r.km === 'number' ? r.km : Math.round(polylineKm(points) * 10) / 10,
     created: r.created ?? r.saved ?? new Date().toISOString().slice(0, 10),
     driveTimeFromHome: r.driveTimeFromHome ?? null,
-    meta: { ...META_DEFAULT, ...(r.meta ?? {}) }
+    meta: migrateMeta({ ...META_DEFAULT, ...(r.meta ?? {}) })
   };
 }
 

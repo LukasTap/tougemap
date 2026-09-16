@@ -170,16 +170,15 @@ const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
 // overlapping still reads as clutter when it lands next door to a label that
 // means something.
 //
-// LABEL_W is an "02h" in chart units. The first and last labels hug the
-// segment rather than overhanging it, so their effective centre sits half a
-// label in from the edge.
-export const LABEL_W = 22;
+// LABEL_W is a two-digit hour in chart units. Every label is centred on its own
+// tick, including the first and last: hugging the ends instead made those two
+// sit visibly off their dashes while the middle ones sat on theirs.
+export const LABEL_W = 16;
 
 export function axisLabelIndices(hours, hourW) {
   const n = hours.length;
   if (!n) return [];
-  const span = Math.max(1, n - 1) * hourW;
-  const centre = (k) => (k === 0 ? LABEL_W / 2 : k === n - 1 ? span - LABEL_W / 2 : k * hourW);
+  const centre = (k) => k * hourW;
   const edges = [];
   hours.forEach((h, k) => { if (h.hour === DRIVE_FROM || h.hour === DRIVE_TO) edges.push(k); });
   const wanted = [
@@ -263,14 +262,27 @@ export function buildNightChart(groups, geom = CHART) {
   const freezeY = r1(clamp(yTmp(FREEZE_C), geom.tmpTop, geom.tmpBase));
   const frostY = r1(clamp(yTmp(FROST_C), geom.tmpTop, geom.tmpBase));
 
+  // A few labelled gridlines on nice values, so the temperature curve can be
+  // read as degrees rather than just "it goes down and turns white". Step is
+  // picked to land 2-4 lines; 0 is skipped when the freezing line already draws
+  // it in its own colour.
+  const range = hi - lo;
+  const step = range <= 6 ? 2 : range <= 16 ? 5 : 10;
+  const showFreeze = lo < FREEZE_C && FREEZE_C < hi;
+  const tempTicks = [];
+  for (let v = Math.ceil(lo / step) * step; v < hi; v += step) {
+    if (v <= lo || (v === FREEZE_C && showFreeze)) continue;
+    tempTicks.push({ v, y: r1(yTmp(v)) });
+  }
+
   return {
     geom, segments, ticks, breaks, hourW: r1(hourW),
     temp: {
-      lo, hi,
+      lo, hi, ticks: tempTicks,
       freezeY, frostY,
       iceHeight: r1(geom.tmpBase - freezeY),   // at or below 0°C
       frostHeight: r1(freezeY - frostY),        // 0°C to +3°C
-      showFreeze: lo < FREEZE_C && FREEZE_C < hi,
+      showFreeze,
       stopFreeze: stopAt(FREEZE_C),
       stopFrost: stopAt(FROST_C)
     }
