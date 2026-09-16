@@ -1,0 +1,112 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600&display=swap">
+  <style>
+    body { margin: 0; background: #0a0c0e; font-family: 'Barlow', system-ui, sans-serif; }
+  </style>
+</helmet>
+
+<div style="width: 420px; height: 700px; box-sizing: border-box; background: #0a0c0e; color: #e8eaf0; padding: 26px; display: flex; flex-direction: column; gap: 15px;">
+
+  <div style="display: flex; flex-direction: column; gap: 5px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #e8a020; text-transform: uppercase;">Ice treatment</div>
+    <div style="font-size: 12.5px; line-height: 1.5; color: #8a9bb0;">Same night in all three — Thu, clear and cooling, crossing zero at 03:00. Drawn double height so the colour decisions are visible.</div>
+  </div>
+
+  <sc-for list="{{variants}}" as="v" hint-placeholder-count="3">
+    <div style="display: flex; flex-direction: column; gap: 5px;">
+      <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #e8a020; text-transform: uppercase;">{{v.name}}</div>
+      <svg width="340" height="88" viewBox="0 0 340 88" xmlns="http://www.w3.org/2000/svg" style="display: block;">
+        <defs>
+          <linearGradient id="g{{v.id}}" x1="0" y1="78" x2="0" y2="8" gradientUnits="userSpaceOnUse">
+            <sc-for list="{{v.stops}}" as="s" hint-placeholder-count="7">
+              <stop offset="{{s.o}}" stop-color="{{s.c}}"></stop>
+            </sc-for>
+          </linearGradient>
+        </defs>
+        <rect x="0" y="{{y3}}" width="340" height="{{h3}}" fill="#7fc8e8" opacity="{{v.band3}}"></rect>
+        <rect x="0" y="{{y0}}" width="340" height="{{h0}}" fill="#d8f0fa" opacity="{{v.band0}}"></rect>
+        <line x1="0" y1="{{y3}}" x2="340" y2="{{y3}}" stroke="#7fc8e8" stroke-width="1" stroke-opacity="{{v.rule3}}" stroke-dasharray="2 4"></line>
+        <line x1="0" y1="{{y0}}" x2="340" y2="{{y0}}" stroke="#d8f0fa" stroke-width="1" stroke-opacity="{{v.rule0}}" stroke-dasharray="3 3"></line>
+        <text x="338" y="{{l3}}" text-anchor="end" font-family="'Space Mono', monospace" font-size="8" fill="#7fc8e8" fill-opacity="0.75">+3°C</text>
+        <text x="338" y="{{l0}}" text-anchor="end" font-family="'Space Mono', monospace" font-size="8" fill="#d8f0fa" fill-opacity="0.85">0°C</text>
+        <path d="{{line}}" fill="none" stroke="{{v.stroke}}" stroke-width="2.4" stroke-linejoin="round" stroke-linecap="round"></path>
+      </svg>
+      <div style="font-size: 11.5px; line-height: 1.45; color: #8a9bb0;">{{v.note}}</div>
+    </div>
+  </sc-for>
+
+  <div style="padding: 11px 12px; background: #111418; border: 1px solid #2a3040; border-radius: 5px; display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Why +3, not 0</div>
+    <div style="font-size: 11.5px; line-height: 1.5; color: #8a9bb0;">Tarmac radiates heat to a clear sky faster than the air above it, so the road sits below the reported air temperature — bridges and shaded valley floors first. +3°C air is a live ice possibility; road-weather services trigger frost warnings around +4°C. The conditions driving that are the same ones driving the fog curve.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px; margin-top: auto;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Recommendation</div>
+    <div style="font-size: 12px; line-height: 1.5; color: #8a9bb0;">A. Zero is physics, not a gradient — a hard colour change earns its keep there. B blurs the one boundary that matters. C is cleanest but makes you read a position against a rule instead of just seeing the line go white.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const tmp = [9, 7, 5, 4, 3, 2, 1, 0, -1, -2, -2];
+    const W = 340, BASE = 78, TOP = 8;
+    const lo = Math.min.apply(null, tmp) - 1, hi = Math.max.apply(null, tmp) + 1;
+    const y = (t) => BASE - ((t - lo) / (hi - lo)) * (BASE - TOP);
+    const line = 'M' + tmp.map((t, i) =>
+      ((i / (tmp.length - 1)) * W).toFixed(1) + ' ' + y(t).toFixed(1)).join(' L');
+
+    const y0 = y(0), y3 = y(3);
+    const off = (yy) => ((BASE - yy) / (BASE - TOP)).toFixed(4);
+    const z0 = off(y0), z3 = off(y3);
+
+    const ICE = '#d8f0fa', COLD = '#7fc8e8', NEUT = '#8a9bb0', MILD = '#c98a30';
+
+    return {
+      line: line,
+      y0: y0.toFixed(1), h0: (BASE - y0).toFixed(1), l0: (y0 - 3).toFixed(1),
+      y3: y3.toFixed(1), h3: (y0 - y3).toFixed(1), l3: (y3 - 3).toFixed(1),
+      variants: [
+        {
+          id: 'a', name: 'A · crisp thresholds', stroke: 'url(#ga)',
+          band3: '0.06', band0: '0.10', rule3: '0.0', rule0: '0.45',
+          stops: [
+            { o: '0', c: ICE }, { o: z0, c: ICE }, { o: z0, c: COLD },
+            { o: z3, c: COLD }, { o: z3, c: NEUT }, { o: '0.75', c: NEUT }, { o: '1', c: MILD }
+          ],
+          note: 'The line turns ice-white the instant it crosses zero. You see the freeze, you do not measure it.'
+        },
+        {
+          id: 'b', name: 'B · smooth blend', stroke: 'url(#gb)',
+          band3: '0.06', band0: '0.10', rule3: '0.0', rule0: '0.45',
+          stops: [
+            { o: '0', c: ICE }, { o: '0.18', c: COLD }, { o: '0.45', c: NEUT },
+            { o: '0.75', c: NEUT }, { o: '1', c: MILD }, { o: '1', c: MILD }, { o: '1', c: MILD }
+          ],
+          note: 'Matches the fog curve’s language, but zero stops being an event — the line is already half-blue at +2 and you cannot tell where it crossed.'
+        },
+        {
+          id: 'c', name: 'C · bands only', stroke: '#8a9bb0',
+          band3: '0.10', band0: '0.18', rule3: '0.5', rule0: '0.7',
+          stops: [
+            { o: '0', c: NEUT }, { o: '1', c: NEUT }, { o: '1', c: NEUT },
+            { o: '1', c: NEUT }, { o: '1', c: NEUT }, { o: '1', c: NEUT }, { o: '1', c: NEUT }
+          ],
+          note: 'Quietest, and the zones stay legible even where the line is flat. But it asks you to judge a position against a rule rather than just noticing a colour.'
+        }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,31 +1,22 @@
 // js/tonight-rank.js — pure ranking of the library by night conditions
-import { calcFogScore } from './weather.js';
+import { firstNightHours, decisionHours } from './weather.js';
 
-function nextNightIndex(d, now) {
-  return d.hourly.time.findIndex(t => new Date(t) > now);
-}
-
-// First forecast index that is both after `now` AND within the night window
-// (20:00–06:00), matching calcFogScore's window. Falls back to the plain
-// next-hour index if no night hour is present in the data.
-function nextNightHourIndex(d, now) {
-  const idx = d.hourly.time.findIndex(t => {
-    const dt = new Date(t);
-    if (dt <= now) return false;
-    const h = dt.getHours();
-    return h >= 20 || h <= 6;
-  });
-  return idx >= 0 ? idx : nextNightIndex(d, now);
-}
-
+// Ranks on the hours actually driven (22:00–02:00, or what is left of the night
+// once that is past) rather than on the whole night.
+//
+// Every component is now the worst case across those hours. Fog used to come
+// from the whole night while rain and temperature came from a single arbitrary
+// hour — the next one after `now`, which in the afternoon is an hour you will
+// never drive in — so the three parts of one score described three different
+// stretches of time.
 export function scoreRoad(road, forecast, now) {
-  const ni = nextNightHourIndex(forecast, now);
-  const fog = calcFogScore(forecast, now);
-  const rainPct = ni >= 0 ? (forecast.hourly.precipitation_probability?.[ni] ?? 0) : 0;
-  const temp = ni >= 0 ? forecast.hourly.temperature_2m[ni] : 15;
+  const hours = decisionHours(firstNightHours(forecast, now));
+  if (!hours.length) return { fog: 0, rainPct: 0, temp: null, score: Infinity };
+  const fog = Math.max(...hours.map(h => h.risk));
+  const rainPct = Math.max(...hours.map(h => h.precip));
+  const temp = Math.min(...hours.map(h => h.temp));
   const tempPenalty = Math.max(0, 8 - temp) * 2;
-  const score = fog * 1.0 + rainPct * 0.6 + tempPenalty;
-  return { fog, rainPct, temp, score };
+  return { fog, rainPct, temp, score: fog * 1.0 + rainPct * 0.6 + tempPenalty };
 }
 
 export function rankRoads(entries, now) {

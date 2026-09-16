@@ -1,6 +1,19 @@
 // js/library.js — road cards, thumbnails, sort/filter
 import { simplifyForThumbnail } from './geo.js';
-import { fogBadge } from './weather.js';
+import { fogColor } from './curvature.js';
+
+// The night as a strip of colour: one segment per hour, 20:00→06:00.
+//
+// This replaced a single word ("EXTREME"). A word cannot tell a night that is
+// fogged end to end from one that is clear until 05:00 and then shuts — those
+// are opposite decisions. Gapless, because a card is a preview: the shape of
+// the night is the point here, the detail is in the inspector.
+export function fogStripHtml(risks) {
+  if (!risks || !risks.length) return '<span>no forecast</span>';
+  const worst = Math.max(...risks);
+  const cells = risks.map(r => `<i style="background:${fogColor(r)}"></i>`).join('');
+  return `<span class="fog-strip" title="Fog risk by hour, 20:00–06:00 — peaks at ${worst}%">${cells}</span>`;
+}
 
 // Escapes owner-authored text before it's injected via innerHTML, so a
 // stray `<` or `&` in a road name/notes can't break the surrounding markup.
@@ -36,16 +49,17 @@ export function metaChipsHtml(meta) {
   return chips.join('');
 }
 
-export function roadCardHtml(road, { fogScore = null } = {}) {
+export function roadCardHtml(road, { risks = null } = {}) {
   // Distance by road (km) is the metric we trust — drive-time is unreliable on
   // the SK network, so it stays a subnote in the inspector and never appears here.
   const dh = road.driveTimeFromHome?.km != null ? `${road.driveTimeFromHome.km} km from home` : '— from home';
-  const fog = fogScore != null ? (b => `<span class="fog-badge ${b.cls}">${b.lbl}</span>`)(fogBadge(fogScore)) : '';
+  const fog = risks ? fogStripHtml(risks) : '';
   return `
     <div class="road-lib-item" data-id="${road.id}">
       ${thumbnailSvg(road.points)}
       <div class="road-lib-name">${escapeHtml(road.name)}</div>
-      <div class="road-lib-meta"><span>${road.km} km long</span><span>${dh}</span>${fog}</div>
+      <div class="road-lib-meta"><span>${road.km} km long</span><span>${dh}</span></div>
+      ${fog}
       <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
     </div>`;
 }

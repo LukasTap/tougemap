@@ -78,9 +78,13 @@ export function peekSheet(title) {
 
 export function initSheetDrag() {
   const sheet = document.getElementById('bottom-sheet');
-  const handle = document.getElementById('sheet-handle-bar');
+  // Drag from the whole header, not the 4px bar — a hairline hit area is
+  // unusable with a fingertip. See #sheet-grab in styles.css.
+  const handle = document.getElementById('sheet-grab');
   if (!sheet || !handle) return;
-  let startY;
+  let startY = null;
+  // A tap on ✕ must close the sheet, not start a drag.
+  const onCloseBtn = (e) => !!(e.target?.closest?.('#sheet-close-btn'));
 
   const onStart = (y) => { startY = y; sheet.style.transition = 'none'; };
   const onMove = (y) => {
@@ -91,18 +95,22 @@ export function initSheetDrag() {
     sheet.style.transform = `translateY(${newY}px)`;
   };
   const onEnd = (y) => {
+    if (startY === null) return;
     sheet.style.transition = '';
     sheet.style.transform = '';
     const dy = y - startY;
+    startY = null;
     const cur = sheet.className;
-    if (dy < -60) sheet.className = cur === 'peek' ? 'half' : 'open';
-    else if (dy > 60) sheet.className = cur === 'open' ? 'half' : 'peek';
+    if (dy < -50) sheet.className = cur === 'peek' ? 'half' : 'open';
+    else if (dy > 50) sheet.className = cur === 'open' ? 'half' : 'peek';
   };
 
-  handle.addEventListener('touchstart', e => onStart(e.touches[0].clientY), { passive: true });
-  handle.addEventListener('touchmove', e => onMove(e.touches[0].clientY), { passive: true });
+  handle.addEventListener('touchstart', e => { if (!onCloseBtn(e)) onStart(e.touches[0].clientY); }, { passive: true });
+  handle.addEventListener('touchmove', e => { if (startY !== null) onMove(e.touches[0].clientY); }, { passive: true });
   handle.addEventListener('touchend', e => onEnd(e.changedTouches[0].clientY));
+  handle.addEventListener('touchcancel', () => { startY = null; sheet.style.transition = ''; sheet.style.transform = ''; });
   handle.addEventListener('mousedown', e => {
+    if (onCloseBtn(e)) return;
     onStart(e.clientY);
     const mm = e2 => onMove(e2.clientY);
     const mu = e2 => { onEnd(e2.clientY); document.removeEventListener('mousemove', mm); document.removeEventListener('mouseup', mu); };

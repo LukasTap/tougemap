@@ -1,0 +1,122 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600&display=swap">
+  <style>
+    body { margin: 0; background: #0a0c0e; font-family: 'Barlow', system-ui, sans-serif; }
+    a { color: #e8a020; } a:hover { color: #c07010; }
+  </style>
+</helmet>
+
+<div style="width: 420px; height: 560px; box-sizing: border-box; background: #0a0c0e; color: #e8eaf0; padding: 28px; display: flex; flex-direction: column; gap: 18px;">
+
+  <div style="display: flex; flex-direction: column; gap: 5px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #e8a020; text-transform: uppercase;">A · Curve</div>
+    <div style="font-size: 12.5px; line-height: 1.5; color: #8a9bb0;">Height is fog %, colour comes from height — so a calm night lies flat and green, a bad one rears up purple.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 4px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #e8a020; text-transform: uppercase;">Tonight</div>
+    <svg width="308" height="56" viewBox="0 0 308 56" xmlns="http://www.w3.org/2000/svg" style="display: block;">
+      <defs>
+        <linearGradient id="fogV" x1="0" y1="56" x2="0" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3ecf6e"></stop>
+          <stop offset="0.30" stop-color="#3ecf6e"></stop>
+          <stop offset="0.42" stop-color="#f5c842"></stop>
+          <stop offset="0.62" stop-color="#8090c8"></stop>
+          <stop offset="0.82" stop-color="#c8b4ff"></stop>
+          <stop offset="1" stop-color="#c8b4ff"></stop>
+        </linearGradient>
+        <linearGradient id="fogFill" x1="0" y1="56" x2="0" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3ecf6e" stop-opacity="0.05"></stop>
+          <stop offset="0.42" stop-color="#f5c842" stop-opacity="0.14"></stop>
+          <stop offset="0.82" stop-color="#c8b4ff" stop-opacity="0.30"></stop>
+        </linearGradient>
+      </defs>
+      <line x1="0" y1="51" x2="308" y2="51" stroke="#2a3040" stroke-width="1"></line>
+      <path d="{{area}}" fill="url(#fogFill)"></path>
+      <path d="{{line}}" fill="none" stroke="url(#fogV)" stroke-width="2.5" stroke-linejoin="round" stroke-linecap="round"></path>
+      <circle cx="{{peakX}}" cy="{{peakY}}" r="3.5" fill="#c8b4ff"></circle>
+    </svg>
+    <div style="display: flex; justify-content: space-between; font-family: 'Space Mono', monospace; font-size: 9px; color: #5a6a80;">
+      <span>20h</span><span>23h</span><span>02h</span><span>05h</span>
+    </div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 4px; opacity: 0.66;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Thu night</div>
+    <svg width="308" height="46" viewBox="0 0 308 46" xmlns="http://www.w3.org/2000/svg" style="display: block;">
+      <defs>
+        <linearGradient id="fogV2" x1="0" y1="46" x2="0" y2="0" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3ecf6e"></stop>
+          <stop offset="0.30" stop-color="#3ecf6e"></stop>
+          <stop offset="0.42" stop-color="#f5c842"></stop>
+          <stop offset="0.62" stop-color="#8090c8"></stop>
+          <stop offset="0.82" stop-color="#c8b4ff"></stop>
+        </linearGradient>
+      </defs>
+      <line x1="0" y1="42" x2="308" y2="42" stroke="#2a3040" stroke-width="1" stroke-dasharray="2 3"></line>
+      <path d="{{line2}}" fill="none" stroke="url(#fogV2)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+    </svg>
+  </div>
+
+  <div style="display: flex; align-items: center; gap: 10px; padding: 10px 12px; background: #111418; border: 1px solid #2a3040; border-radius: 5px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 10px; color: #8a9bb0;">Scale: <span style="color: #e8a020;">{{scaleLabel}}</span></div>
+    <div style="font-size: 11px; line-height: 1.45; color: #5a6a80;">{{scaleNote}}</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 7px; margin-top: auto;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Tradeoff</div>
+    <div style="font-size: 12.5px; line-height: 1.5; color: #8a9bb0;">Shape carries the whole night at a glance and the peak is unmissable. You lose the per-hour temperature and the exact % per hour — you read the curve, not the numbers.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script data-props='{"scale":{"editor":"enum","options":["absolute","normalised"],"default":"absolute","section":"Scale"}}'>
+class Component extends DCLogic {
+  renderVals() {
+    // Real shape from today's forecast: mild all evening, then a dawn spike.
+    const tonight = [10, 10, 10, 10, 10, 10, 10, 20, 20, 80, 100];
+    const next    = [25, 45, 70, 100, 100, 70, 50, 35, 25, 25, 20];
+    const mode = this.props.scale ?? 'absolute';
+
+    const build = (vals, W, H, pad) => {
+      let lo = 0, hi = 100;
+      if (mode === 'normalised') {
+        lo = Math.min.apply(null, vals);
+        hi = Math.max.apply(null, vals);
+        if (hi === lo) hi = lo + 1;
+      }
+      const y = (r) => {
+        const t = (r - lo) / (hi - lo);
+        return H - pad - Math.max(0, Math.min(1, t)) * (H - pad * 2);
+      };
+      const pts = vals.map((r, i) => [(i / (vals.length - 1)) * W, y(r)]);
+      const line = 'M' + pts.map((p) => p[0].toFixed(1) + ' ' + p[1].toFixed(1)).join(' L');
+      const area = line + ' L' + W + ' ' + (H - pad + 5) + ' L0 ' + (H - pad + 5) + ' Z';
+      let pi = 0;
+      for (let i = 1; i < vals.length; i++) if (vals[i] > vals[pi]) pi = i;
+      return { line: line, area: area, peakX: pts[pi][0].toFixed(1), peakY: pts[pi][1].toFixed(1) };
+    };
+
+    const a = build(tonight, 308, 56, 5);
+    const b = build(next, 308, 46, 4);
+    return {
+      line: a.line, area: a.area, peakX: a.peakX, peakY: a.peakY,
+      line2: b.line,
+      scaleLabel: mode,
+      scaleNote: mode === 'absolute'
+        ? '0–100 fixed. A calm night sits flat and low; an all-foggy night sits flat and HIGH.'
+        : 'Min→max stretched. Warning: a night that is 100% fog throughout flattens to a calm-looking line.'
+    };
+  }
+}
+</script>
+</body>
+</html>

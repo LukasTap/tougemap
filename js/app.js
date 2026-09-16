@@ -5,9 +5,12 @@
 
 import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGroup } from './map.js';
 import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
-import { createWeatherClient, fogBadge, calcFogScore, wmoDesc, nightHours } from './weather.js';
-import { rankRoads, reachable, scoreRoad } from './tonight-rank.js';
-import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml } from './library.js';
+import {
+  createWeatherClient, wmoDesc, nightHours, nightGroups, nightExtremes, decisionHours,
+  tonightRisks, buildNightChart, axisLabelIndices, DRIVE_FROM, DRIVE_TO
+} from './weather.js';
+import { rankRoads, reachable } from './tonight-rank.js';
+import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
 import {
   onDraftUpdate, getDraftState, startPlacing, handleMapClick, clearRoutePoint,
   addWaypoint, removeWaypoint, clearWaypoints, saveRoad, editMeta, renameRoad,
@@ -137,16 +140,14 @@ function renderLibrary(container) {
   }
   container.innerHTML = roads.map(r => roadCardHtml(r)).join('');
   wireCardClicks(container, roads);
-  // Per-card fog badge, fetched lazily (grid-deduped/cached by weatherClient).
+  // Per-card fog strip, fetched lazily (grid-deduped/cached by weatherClient).
   for (const r of roads) {
     const mid = midpoint(r);
     if (!mid) continue;
     appState.weatherClient.get(mid.lat, mid.lon).then(fc => {
-      const cardEl = container.querySelector(`.road-lib-item[data-id="${r.id}"] .road-lib-meta`);
-      if (!cardEl || cardEl.querySelector('.fog-badge')) return;
-      const score = calcFogScore(fc, appState.now());
-      const badge = fogBadge(score);
-      cardEl.insertAdjacentHTML('beforeend', `<span class="fog-badge ${badge.cls}">${badge.lbl}</span>`);
+      const metaEl = container.querySelector(`.road-lib-item[data-id="${r.id}"] .road-lib-meta`);
+      if (!metaEl || metaEl.parentElement.querySelector('.fog-strip')) return;
+      metaEl.insertAdjacentHTML('afterend', fogStripHtml(tonightRisks(fc, appState.now())));
     }).catch(() => {});
   }
 }
@@ -172,12 +173,12 @@ async function renderTonight(container) {
   } else {
     container.innerHTML = ranked.map(road => {
       const entry = entries.find(e => e.road.id === road.id);
-      const s = entry?.forecast ? scoreRoad(road, entry.forecast, appState.now()) : null;
-      const badge = s ? fogBadge(s.fog) : null;
+      const risks = entry?.forecast ? tonightRisks(entry.forecast, appState.now()) : null;
       return `<div class="road-lib-item" data-id="${road.id}">
         ${thumbnailSvg(road.points)}
         <div class="road-lib-name">${escapeHtml(road.name)}</div>
-        <div class="road-lib-meta"><span>${road.km} km</span>${badge ? `<span class="fog-badge ${badge.cls}">${badge.lbl}</span>` : '<span>no forecast</span>'}</div>
+        <div class="road-lib-meta"><span>${road.km} km</span></div>
+        ${fogStripHtml(risks)}
         <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
       </div>`;
     }).join('');
@@ -260,53 +261,147 @@ function roadInspectorHtml(road, editable) {
   `;
 }
 
-// Full weather panel: current conditions, the 6-stat grid, and the tonight
-// hour-by-hour strip with fog-risk dots (20:00–06:00).
+const hh = (h) => String(h).padStart(2, '0');
+
+function nightLabel(key, idx) {
+  if (idx === 0) return 'Tonight';
+  const d = new Date(`${key}T20:00:00`);
+  // en-GB explicitly: the rest of the UI is English, and the browser locale
+  // would otherwise mix a Slovak weekday into "št night".
+  return isNaN(d.getTime()) ? 'Next night' : `${d.toLocaleDateString('en-GB', { weekday: 'short' })} night`;
+}
+
+// Both nights as one chart: fog above, temperature below, one shared x-axis.
+// Height is the value, colour carries meaning — fog green→purple by severity,
+// temperature keyed to real degrees so freezing reads as ice regardless of how
+// the night's own range happens to fall.
+function nightChartHtml(chart) {
+  const { geom, segments, ticks, breaks, temp } = chart;
+  const tickMarks = ticks.map(x =>
+    `<line class="nc-tick" x1="${x}" y1="${geom.tmpBase}" x2="${x}" y2="${geom.tickEnd}"/>`).join('');
+  const breakMarks = breaks.map(x =>
+    `<line class="nc-break" x1="${x}" y1="0" x2="${x}" y2="${geom.tickEnd}"/>` +
+    `<text class="nc-break-lbl" x="${x}" y="${geom.h - 4}" text-anchor="middle">day</text>`).join('');
+  // Drawn first, behind everything: the stretch actually driven. A neutral lift
+  // rather than another colour — every hue on this chart already means something.
+  const driveBand = segments.map(s => s.drive
+    ? `<rect class="nc-drive" x="${s.drive.x0}" y="0" width="${s.drive.width}" height="${geom.tickEnd}"/>
+       <line class="nc-drive-edge" x1="${s.drive.x0}" y1="0" x2="${s.drive.x0}" y2="${geom.tickEnd}"/>
+       <line class="nc-drive-edge" x1="${s.drive.x1}" y1="0" x2="${s.drive.x1}" y2="${geom.tickEnd}"/>`
+    : '').join('');
+  const bands =
+    (temp.frostHeight > 0 ? `<rect class="nc-frost" x="0" y="${temp.frostY}" width="${geom.w}" height="${temp.frostHeight}"/>` : '') +
+    (temp.iceHeight > 0 ? `<rect class="nc-ice" x="0" y="${temp.freezeY}" width="${geom.w}" height="${temp.iceHeight}"/>` : '') +
+    (temp.showFreeze
+      ? `<line class="nc-freeze" x1="0" y1="${temp.freezeY}" x2="${geom.w}" y2="${temp.freezeY}"/>` +
+        `<text class="nc-freeze-lbl" x="${geom.w}" y="${temp.freezeY - 2}" text-anchor="end">0°C</text>`
+      : '');
+  const plots = segments.map((s, i) => {
+    const dim = i ? ' nc-later' : '';
+    return `<line class="nc-base${dim}" x1="${s.x0}" y1="${geom.fogBase}" x2="${s.x1}" y2="${geom.fogBase}"/>
+      <path class="nc-fog-area${dim}" d="${s.fogArea}" fill="url(#ncFogFill)"/>
+      <path class="nc-fog-line${dim}" d="${s.fogLine}" stroke="url(#ncFogStroke)"/>
+      <path class="nc-tmp-line${dim}" d="${s.tempLine}" stroke="url(#ncTmpStroke)"/>
+      <circle class="nc-peak${dim}" cx="${s.peak.x}" cy="${s.peak.y}" r="3.2" fill="${fogColor(s.peak.risk)}"/>`;
+  }).join('');
+  const first = segments[0];
+  return `<svg class="night-chart" viewBox="0 0 ${geom.w} ${geom.h}" xmlns="http://www.w3.org/2000/svg" role="img">
+      <title>Fog and temperature by hour, 20:00–06:00; the shaded stretch is ${DRIVE_FROM}:00–0${DRIVE_TO}:00, the hours actually driven. Tonight's fog peaks at ${first.peak.risk}% around ${hh(first.peak.hour)}:00.</title>
+      <defs>
+        <linearGradient id="ncFogStroke" x1="0" y1="${geom.fogBase}" x2="0" y2="${geom.fogTop}" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3ecf6e"/><stop offset=".30" stop-color="#3ecf6e"/>
+          <stop offset=".42" stop-color="#f5c842"/><stop offset=".62" stop-color="#8090c8"/>
+          <stop offset=".82" stop-color="#c8b4ff"/><stop offset="1" stop-color="#c8b4ff"/>
+        </linearGradient>
+        <linearGradient id="ncFogFill" x1="0" y1="${geom.fogBase}" x2="0" y2="${geom.fogTop}" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#3ecf6e" stop-opacity=".05"/>
+          <stop offset=".42" stop-color="#f5c842" stop-opacity=".14"/>
+          <stop offset=".82" stop-color="#c8b4ff" stop-opacity=".30"/>
+        </linearGradient>
+        <linearGradient id="ncTmpStroke" x1="0" y1="${geom.tmpBase}" x2="0" y2="${geom.tmpTop}" gradientUnits="userSpaceOnUse">
+          <stop offset="0" stop-color="#d8f0fa"/>
+          <stop offset="${temp.stopFreeze}" stop-color="#d8f0fa"/>
+          <stop offset="${temp.stopFreeze}" stop-color="#7fc8e8"/>
+          <stop offset="${temp.stopFrost}" stop-color="#7fc8e8"/>
+          <stop offset="${temp.stopFrost}" stop-color="#8a9bb0"/>
+          <stop offset=".70" stop-color="#8a9bb0"/>
+          <stop offset="1" stop-color="#c98a30"/>
+        </linearGradient>
+      </defs>
+      ${driveBand}
+      ${bands}
+      ${tickMarks}
+      ${plots}
+      ${breakMarks}
+    </svg>`;
+}
+
+// Hour labels under each night. Up to four, and when the driving window's edges
+// are in range they take two of the slots — so the shaded band is bounded by
+// two labelled hours and needs no legend of its own.
+//
+// Each label is positioned at its true fraction of the night rather than spaced
+// evenly: evenly-spaced labels only approximate their own hour, and here they
+// would land clear of the band edges they are supposed to mark.
+const CHAR_W = 7.2;     // Space Mono at 9px with the uppercase letter-spacing
+
+function axisHtml(segments, hourW) {
+  return segments.map((s, i) => {
+    const n = s.hours.length;
+    const span = Math.max(1, n - 1) * hourW;
+    const marks = axisLabelIndices(s.hours, hourW).map(k => {
+      const pct = n < 2 ? 50 : (k / (n - 1)) * 100;
+      const shift = k === 0 ? '0' : k === n - 1 ? '-100%' : '-50%';
+      return `<span style="left:${pct.toFixed(1)}%;transform:translateX(${shift})">${hh(s.hours[k].hour)}h</span>`;
+    }).join('');
+    // The night's name is dropped rather than left to collide with the next
+    // one; position and the neighbour's name still identify it.
+    const name = nightLabel(s.key, i);
+    const fits = span >= name.length * CHAR_W + 9;
+    return `<div class="nc-axis-seg${i ? ' nc-later' : ''}" style="flex:${Math.max(1, n - 1)} 1 0">
+        <div class="nc-axis-night">${fits ? name : ''}</div>
+        <div class="nc-axis-hours">${marks}</div>
+      </div>`;
+  }).join('<div class="nc-axis-gap" aria-hidden="true"></div>');
+}
+
+// Full weather panel: current conditions, the night chart, and four night-scoped
+// tiles. Humidity / dew point / dew spread used to sit here as current-hour
+// readings — they are the ingredients calcFogScore is cooked from, so printing
+// them beside the score was the recipe next to the dish.
 function weatherHtml(fc) {
   const now = appState.now();
   const H = fc.hourly;
   const ni = H.time.findIndex(t => new Date(t) > now);
   if (ni < 0) return '<div style="font-size:11px;color:var(--text3)">No forecast.</div>';
-  const temp = H.temperature_2m[ni], rh = H.relative_humidity_2m[ni], dew = H.dew_point_2m[ni];
-  const wind = H.windspeed_10m[ni], precip = H.precipitation_probability?.[ni] ?? 0, wcode = H.weathercode?.[ni];
-  const fs = calcFogScore(fc, now), fb = fogBadge(fs), spread = (temp - dew).toFixed(1);
-  // Group the upcoming night hours into nights (20:00→06:00) so the strip shows
-  // a clear break where one night ends and the next begins. Same source the
-  // headline badge scores from, so the dots and the badge always agree.
-  const groups = [];
-  for (const h of nightHours(fc, now)) {
-    const last = groups[groups.length - 1];
-    if (!last || last.key !== h.key) groups.push({ key: h.key, hours: [h] });
-    else last.hours.push(h);
-  }
-  const cell = (h) => `<div class="hour-cell" title="Fog risk ${h.risk}%"><div class="htime">${String(h.hour).padStart(2, '0')}h</div><div class="htemp">${Math.round(h.temp)}°</div><div class="hfog" style="background:${fogColor(h.risk)}"></div><div class="hfog-pct">${h.risk}</div></div>`;
-  const nightLabel = (key, idx) => {
-    if (idx === 0) return 'Tonight';
-    const d = new Date(`${key}T20:00:00`);
-    // en-GB explicitly: the rest of the UI is English, and the browser locale
-    // would otherwise mix a Slovak weekday into "št night".
-    return isNaN(d.getTime()) ? 'Next night' : `${d.toLocaleDateString('en-GB', { weekday: 'short' })} night`;
-  };
-  const strip = groups.slice(0, 2).map((g, gi) => `
-      <div class="night-group${gi ? ' later-night' : ''}">
-        <div class="night-label">${nightLabel(g.key, gi)}</div>
-        <div class="night-cells">${g.hours.map(cell).join('')}</div>
-      </div>`).join('<div class="night-sep" aria-hidden="true"></div>');
+  const temp = H.temperature_2m[ni], wcode = H.weathercode?.[ni];
+  const groups = nightGroups(nightHours(fc, now));
+  const chart = buildNightChart(groups);
+  // The chart draws the whole night; the tiles are scoped to the hours actually
+  // driven. A worst-hour figure taken from 05:00 is true and useless.
+  const decide = groups.length ? decisionHours(groups[0].hours) : [];
+  const ext = nightExtremes(decide);
+  const scope = decide.length
+    ? `Worst of ${hh(decide[0].hour)}:00–${hh(decide[decide.length - 1].hour)}:00`
+    : '';
+  const tile = (k, v, at, cls) =>
+    `<div class="w-detail"><div class="wlbl">${k}</div><div class="wval ${cls || ''}">${v}${at ? `<span class="wat"> at ${at}</span>` : ''}</div></div>`;
+  const tiles = ext ? [
+    tile('Coldest', `${Math.round(ext.coldest.temp)}°C`, `${hh(ext.coldest.hour)}h`, ext.coldest.temp <= 3 ? 'w-ice' : ''),
+    tile('Fog peak', `${ext.foggiest.risk}%`, `${hh(ext.foggiest.hour)}h`, 'w-fog'),
+    tile('Calmest wind', `${Math.round(ext.calmest.wind)} km/h`, `${hh(ext.calmest.hour)}h`),
+    tile('Rain peak', `${Math.round(ext.wettest.precip)}%`, ext.wettest.precip > 0 ? `${hh(ext.wettest.hour)}h` : '')
+  ].join('') : '';
   return `
     <div class="weather-now">
       <div class="weather-main"><div class="temp-big">${Math.round(temp)}°C</div><div class="weather-desc">${wmoDesc(wcode)}</div></div>
-      <span class="fog-badge ${fb.cls}">FOG TONIGHT: ${fb.lbl}</span>
     </div>
-    <div class="weather-details">
-      <div class="w-detail"><div class="wlbl">Humidity</div><div class="wval">${Math.round(rh)}%</div></div>
-      <div class="w-detail"><div class="wlbl">Dew Point</div><div class="wval">${Math.round(dew)}°C</div></div>
-      <div class="w-detail"><div class="wlbl">Wind</div><div class="wval">${Math.round(wind)} km/h</div></div>
-      <div class="w-detail"><div class="wlbl">Rain Prob</div><div class="wval">${Math.round(precip)}%</div></div>
-      <div class="w-detail"><div class="wlbl">Dew Spread</div><div class="wval">${spread}°C</div></div>
-      <div class="w-detail"><div class="wlbl">Fog peak tonight</div><div class="wval">${Math.round(fs)}/100</div></div>
-    </div>
-    <div class="hourly-title">By hour, 20:00–06:00 · number = fog risk %</div>
-    <div class="hourly-grid">${strip || '<span style="font-size:11px;color:var(--text3)">No night hours in window</span>'}</div>`;
+    <div class="hourly-title">Fog above · temperature below</div>
+    ${chart
+      ? `<div class="night-chart-wrap">${nightChartHtml(chart)}<div class="nc-axis">${axisHtml(chart.segments, chart.hourW)}</div></div>`
+      : '<div style="font-size:11px;color:var(--text3);padding:4px 0 8px">No night hours in window</div>'}
+    ${scope ? `<div class="hourly-title tiles-scope">${scope}</div>` : ''}
+    <div class="weather-details">${tiles}</div>`;
 }
 
 async function fillInspectorWeather(road) {

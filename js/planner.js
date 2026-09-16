@@ -12,6 +12,16 @@ import { normalizeRoad } from './store.js';
 
 const SAVED_COLOR = '#b000ff'; // saved roads always render deep purple (no per-road color in v2)
 
+// Width of the invisible tap target drawn along each saved road. A fingertip
+// needs far more tolerance than a mouse, so coarse pointers get a wider one;
+// ~30px means you only have to land within ~15px either side of the line.
+// Read at render time, not module load — the pointer type can change (tablet
+// with a stylus, desktop browser toggled to device emulation).
+function hitWeight() {
+  const coarse = typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+  return coarse ? 30 : 12;
+}
+
 // Auth for writes: { token, passphrase } — token authorizes the commit,
 // passphrase encrypts the payload (both handled inside writeRoads).
 function getCfg(appState) {
@@ -205,7 +215,8 @@ export function renderSavedRoads(appState) {
   lastRoads = appState.data.roads;
   for (const road of lastRoads) {
     const isSelected = road.id === selectedRoadId;
-    const layer = L.polyline(road.points.map(p => [p.lat, p.lon]), {
+    const latlngs = road.points.map(p => [p.lat, p.lon]);
+    const layer = L.polyline(latlngs, {
       color: SAVED_COLOR,
       weight: isSelected ? 6 : 4,
       opacity: isSelected ? 1 : 0.75,
@@ -214,6 +225,16 @@ export function renderSavedRoads(appState) {
     layer.on('click', () => selectRoad(road.id));
     layer.addTo(savedGroup);
     savedLayers.set(road.id, layer);
+
+    // A 4px stroke is far too thin to hit with a fingertip, so every road also
+    // gets an invisible, much fatter line along the SAME geometry that carries
+    // the tap. Added last so it sits on top and wins the hit-test; the visible
+    // stroke is unchanged. (A bounding box would be wrong here — a long diagonal
+    // road's box covers huge areas of map nowhere near the road itself.)
+    L.polyline(latlngs, {
+      color: SAVED_COLOR, weight: hitWeight(), opacity: 0,
+      lineJoin: 'round', lineCap: 'round'
+    }).on('click', () => selectRoad(road.id)).addTo(savedGroup);
   }
 }
 

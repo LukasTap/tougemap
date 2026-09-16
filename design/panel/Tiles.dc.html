@@ -1,0 +1,97 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600&display=swap">
+  <style>
+    body { margin: 0; background: #0a0c0e; font-family: 'Barlow', system-ui, sans-serif; }
+  </style>
+</helmet>
+
+<div style="width: 460px; height: 700px; box-sizing: border-box; background: #0a0c0e; color: #e8eaf0; padding: 26px; display: flex; flex-direction: column; gap: 14px;">
+
+  <div style="display: flex; flex-direction: column; gap: 5px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #e8a020; text-transform: uppercase;">Info blocks</div>
+    <div style="font-size: 12.5px; line-height: 1.5; color: #8a9bb0;">Four tiles, not six — everything that was only an input to the fog number is gone. Drawn at 308px.</div>
+  </div>
+
+  <sc-for list="{{variants}}" as="v" hint-placeholder-count="3">
+    <div style="display: flex; flex-direction: column; gap: 6px;">
+      <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: {{v.accent}}; text-transform: uppercase;">{{v.name}}</div>
+      <div style="width: 308px; display: grid; grid-template-columns: 1fr 1fr; gap: 6px;">
+        <sc-for list="{{v.tiles}}" as="t" hint-placeholder-count="4">
+          <div style="background: #181c22; border: 1px solid #2a3040; border-radius: 4px; padding: 6px 9px;">
+            <div style="font-size: 9.5px; color: #5a6a80;">{{t.k}}</div>
+            <div style="font-family: 'Space Mono', monospace; font-size: 12.5px; color: {{t.c}};">{{t.v}}<span style="color: #5a6a80; font-size: 10px;">{{t.at}}</span></div>
+          </div>
+        </sc-for>
+      </div>
+      <div style="font-size: 11.5px; line-height: 1.45; color: #8a9bb0;">{{v.note}}</div>
+    </div>
+  </sc-for>
+
+  <div style="padding: 11px 12px; background: #111418; border: 1px solid #2a3040; border-radius: 5px; display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Which end is the bad one</div>
+    <div style="font-size: 11.5px; line-height: 1.5; color: #8a9bb0;">Fog: the <b style="color:#e8eaf0">high</b> end. Temperature: the <b style="color:#e8eaf0">low</b>. Wind: the <b style="color:#e8eaf0">low</b> — still air is what lets fog settle and stay. Dew spread: the <b style="color:#e8eaf0">low</b>. A range prints both ends and leaves you to remember which one you were looking for, differently for every tile.</div>
+  </div>
+
+  <div style="padding: 11px 12px; background: #111418; border: 1px solid #2a3040; border-radius: 5px; display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Retired</div>
+    <div style="font-size: 11.5px; line-height: 1.5; color: #8a9bb0;">Humidity, Dew&nbsp;Point and Dew&nbsp;Spread are the three ingredients the fog score is cooked from. Printing them beside the score is the recipe next to the dish — and they were showing the current hour, not the night. The score and the curve replace all three.</div>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px; margin-top: auto;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Recommendation</div>
+    <div style="font-size: 12px; line-height: 1.5; color: #8a9bb0;">A. The curves already carry the spread — that is their whole job. What a curve cannot give you is an exact figure and the hour it lands on, which is precisely what A adds. Clean division: curve for shape, tile for number and moment.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    const ICE = '#7fc8e8', FOG = '#c8b4ff', PLAIN = '#e8eaf0';
+    return {
+      variants: [
+        {
+          name: 'A · value + when', accent: '#3ecf6e',
+          tiles: [
+            { k: 'Coldest', v: '2°C', at: ' at 05h', c: ICE },
+            { k: 'Fog peak', v: '100%', at: ' at 06h', c: FOG },
+            { k: 'Calmest wind', v: '2 km/h', at: ' at 04h', c: PLAIN },
+            { k: 'Rain peak', v: '0%', at: '', c: PLAIN }
+          ],
+          note: 'Every number is the one that matters, and the hour ties it back to a position on the curve above.'
+        },
+        {
+          name: 'B · low to high', accent: '#e8a020',
+          tiles: [
+            { k: 'Temperature', v: '12° → 2°', at: '', c: ICE },
+            { k: 'Fog risk', v: '10 → 100', at: '', c: FOG },
+            { k: 'Wind', v: '12 → 2 km/h', at: '', c: PLAIN },
+            { k: 'Rain', v: '0 → 0%', at: '', c: PLAIN }
+          ],
+          note: 'Honest about variability, but half the digits are the harmless end — and Rain reads 0 → 0 on most nights, which is a tile spent saying nothing.'
+        },
+        {
+          name: 'C · both', accent: '#8a9bb0',
+          tiles: [
+            { k: 'Temperature', v: '12→2°', at: ' 05h', c: ICE },
+            { k: 'Fog risk', v: '10→100', at: ' 06h', c: FOG },
+            { k: 'Wind', v: '12→2', at: ' 04h', c: PLAIN },
+            { k: 'Rain', v: '0→0%', at: '', c: PLAIN }
+          ],
+          note: 'Complete, and too dense to glance at — three numbers per tile in a 145px box is a table, not a dashboard.'
+        }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

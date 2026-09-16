@@ -1,0 +1,115 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600&display=swap">
+  <style>
+    body { margin: 0; background: #0a0c0e; font-family: 'Barlow', system-ui, sans-serif; }
+  </style>
+</helmet>
+
+<div style="width: 460px; height: 700px; box-sizing: border-box; background: #0a0c0e; color: #e8eaf0; padding: 26px; display: flex; flex-direction: column; gap: 15px;">
+
+  <div style="display: flex; flex-direction: column; gap: 5px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 11px; font-weight: 700; letter-spacing: 2px; color: #e8a020; text-transform: uppercase;">Card summary</div>
+    <div style="font-size: 12.5px; line-height: 1.5; color: #8a9bb0;">Two different nights. Both peak at 100. Both currently say the same word.</div>
+  </div>
+
+  <!-- the case -->
+  <div style="display: flex; flex-direction: column; gap: 9px; padding: 13px; background: #111418; border: 1px solid #2a3040; border-radius: 5px;">
+    <sc-for list="{{cases}}" as="c" hint-placeholder-count="2">
+      <div style="display: flex; flex-direction: column; gap: 5px;">
+        <div style="display: flex; align-items: center; justify-content: space-between;">
+          <div style="font-size: 12px; color: #e8eaf0;">{{c.name}}</div>
+          <span style="padding: 3px 8px; border-radius: 2px; font-family: 'Space Mono', monospace; font-size: 9px; font-weight: 700; letter-spacing: 1.6px; color: #c8b4ff; border: 1px solid #c8b4ff;">EXTREME</span>
+        </div>
+        <div style="display: flex; height: 9px; border-radius: 3px; overflow: hidden;">
+          <sc-for list="{{c.seg}}" as="s" hint-placeholder-count="11">
+            <div style="flex: 1; background: {{s.c}};"></div>
+          </sc-for>
+        </div>
+        <div style="font-size: 11px; color: #5a6a80; line-height: 1.4;">{{c.note}}</div>
+      </div>
+    </sc-for>
+    <div style="font-size: 11.5px; line-height: 1.5; color: #8a9bb0; border-top: 1px solid #2a3040; padding-top: 9px;">The word is identical. The strip is not — and the second road is drivable for most of the night.</div>
+  </div>
+
+  <!-- on a real card -->
+  <div style="display: flex; flex-direction: column; gap: 7px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">On the card</div>
+    <div style="display: flex; gap: 10px;">
+      <sc-for list="{{cards}}" as="k" hint-placeholder-count="2">
+        <div style="flex: 1; background: #111418; border: 1px solid #2a3040; border-radius: 5px; padding: 10px;">
+          <div style="font-family: 'Space Mono', monospace; font-size: 8px; letter-spacing: 1.4px; color: #5a6a80; text-transform: uppercase; margin-bottom: 7px;">{{k.hdr}}</div>
+          <svg width="100%" height="22" viewBox="0 0 180 22" preserveAspectRatio="none" style="display: block; margin-bottom: 6px;">
+            <path d="M2 17 L28 9 L54 13 L80 4 L106 11 L132 6 L158 15 L178 8" fill="none" stroke="#b000ff" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+          </svg>
+          <div style="font-size: 12.5px; font-weight: 600; margin-bottom: 3px;">Vernár pass</div>
+          <div style="font-size: 10px; color: #5a6a80; margin-bottom: 7px;">12.4 km long · 63 km from home</div>
+          <div>{{{k.badge}}}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- ribbon detail -->
+  <div style="display: flex; flex-direction: column; gap: 8px;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Gapless or ticked</div>
+    <sc-for list="{{styles}}" as="v" hint-placeholder-count="2">
+      <div style="display: flex; flex-direction: column; gap: 4px;">
+        <div style="display: flex; height: 9px; border-radius: 3px; overflow: hidden; gap: {{v.gap}};">
+          <sc-for list="{{spike}}" as="s" hint-placeholder-count="11">
+            <div style="flex: 1; background: {{s.c}};"></div>
+          </sc-for>
+        </div>
+        <div style="font-size: 11px; color: #8a9bb0; line-height: 1.4;">{{v.note}}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <div style="display: flex; flex-direction: column; gap: 6px; margin-top: auto;">
+    <div style="font-family: 'Space Mono', monospace; font-size: 9px; letter-spacing: 1.5px; color: #5a6a80; text-transform: uppercase;">Recommendation</div>
+    <div style="font-size: 12px; line-height: 1.5; color: #8a9bb0;">Strip on the cards, nothing in the inspector header — the full curve sits 40px below it there, so a strip would just say the same thing twice. Ticked over gapless: the hour boundaries are what let you say “clear until three”, and it matches the tick marks on the curve.</div>
+  </div>
+
+</div>
+</x-dc>
+<script data-dc-script>
+class Component extends DCLogic {
+  renderVals() {
+    // Same four buckets as the sidebar legend, so the strip and the legend agree.
+    const color = (r) => (r < 30 ? '#3ecf6e' : r < 60 ? '#f5c842' : r < 80 ? '#8090c8' : '#c8b4ff');
+    const seg = (v) => v.map((r) => ({ c: color(r) }));
+
+    const solid = [85, 90, 95, 100, 100, 100, 95, 90, 90, 85, 85];
+    const spike = [10, 10, 10, 10, 10, 10, 10, 20, 20, 80, 100];
+
+    const badge = (lbl) => '<span style="padding:3px 8px;border-radius:2px;font-family:\'Space Mono\',monospace;font-size:9px;font-weight:700;letter-spacing:1.6px;color:#c8b4ff;border:1px solid #c8b4ff;">' + lbl + '</span>';
+    const strip = (v) => '<div style="display:flex;gap:1px;height:8px;border-radius:3px;overflow:hidden;">' +
+      v.map((r) => '<div style="flex:1;background:' + color(r) + ';"></div>').join('') + '</div>';
+
+    return {
+      spike: seg(spike),
+      cases: [
+        { name: 'Fogged all night', seg: seg(solid), note: 'Purple end to end. There is no window — do not go.' },
+        { name: 'Clear until dawn', seg: seg(spike), note: 'Green through 04:00, then it shuts. Seven usable hours.' }
+      ],
+      cards: [
+        { hdr: 'now', badge: badge('EXTREME') },
+        { hdr: 'proposed', badge: strip(spike) }
+      ],
+      styles: [
+        { gap: '0px', note: 'Gapless — cleanest as a block of colour, but the night is one smear and you cannot count to an hour.' },
+        { gap: '1px', note: 'Ticked — 1px between hours. Same countability as the tick marks under the curve, at a glance-sized cost.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>
