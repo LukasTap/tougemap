@@ -61,29 +61,57 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .w-detail .wlbl{font-size:10px;color:var(--text3);margin-bottom:2px}
 .w-detail .wval{color:var(--text);font-weight:500;font-family:'Space Mono',monospace;font-size:12px}
 .hourly-title{font-size:10px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:8px}
-/* Nights stack VERTICALLY: side-by-side would push the second night (and the
-   divider) off the edge of a ~340px panel, so you'd have to scroll to find the
-   very break that's meant to be glanceable. Each night scrolls on its own. */
-.hourly-grid{display:flex;flex-direction:column;gap:7px;padding-bottom:6px}
-.night-cells::-webkit-scrollbar{height:3px}
-.night-cells::-webkit-scrollbar-thumb{background:var(--border2)}
-.hour-cell{min-width:46px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 4px;text-align:center;flex-shrink:0}
-.hour-cell.highlighted{background:var(--surface3);border-color:var(--accent)}
-.hour-cell .htime{font-family:'Space Mono',monospace;font-size:9px;color:var(--text3)}
-.hour-cell .htemp{font-size:13px;font-weight:600;color:var(--text);margin:3px 0}
-.hour-cell .hfog{width:8px;height:8px;border-radius:50%;margin:3px auto 0}
-.hour-cell .hfog-pct{font-family:'Space Mono',monospace;font-size:9px;color:var(--text2);margin-top:3px}
-/* ── night grouping: one labelled row per night, divider between them ── */
-.night-group{display:flex;flex-direction:column;gap:4px}
-.night-cells{display:flex;gap:4px;overflow-x:auto;padding-bottom:2px}
-.night-label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:6px}
-/* a short accent tick before the label so the row break reads at a glance */
-.night-label::before{content:'';width:3px;height:10px;border-radius:2px;background:currentColor;flex-shrink:0}
-.night-sep{height:0;border-top:1px dashed var(--border2);margin:1px 0}
+/* the tiles are window-scoped, so they say which window — a worst-hour number
+   whose span is invisible is exactly the misinformation they replace */
+.tiles-scope{margin-bottom:6px}
+/* ── night chart: both nights, fog above, temperature below, one x-axis ── */
+.night-chart-wrap{display:flex;flex-direction:column;gap:2px;padding-bottom:8px}
+.night-chart{display:block;width:100%;height:auto;overflow:visible}
+.nc-base{stroke:var(--border2);stroke-width:1}
+/* One tick per hour. Deliberately the same colour as the hour labels below, so
+   baseline + ticks + labels read as one axis; at --border2 they vanished. */
+.nc-tick{stroke:var(--text3);stroke-width:1}
+.nc-fog-line{fill:none;stroke-width:2.5;stroke-linejoin:round;stroke-linecap:round}
+.nc-tmp-line{fill:none;stroke-width:2;stroke-linejoin:round;stroke-linecap:round}
+/* The break: the two nights are 14 daylight hours apart, so the paths stop and
+   restart. The rule lives in that gap — nothing crosses it, so nothing can be
+   read across it. */
+.nc-break{stroke:var(--border);stroke-width:1}
+.nc-break-lbl{font-family:'Space Mono',monospace;font-size:7px;fill:var(--text3)}
+/* the hours actually driven, 22:00–02:00. A neutral lift rather than another
+   colour: every hue on this chart already carries a meaning, and the band has
+   to sit under both plots without recolouring either. */
+.nc-drive{fill:#e8eaf0;opacity:.038}
+.nc-drive-edge{stroke:#e8eaf0;stroke-opacity:.15;stroke-width:1}
+/* ice: below 0°C is the hard band, 0–3°C the soft one — road surface runs
+   colder than the air on a clear calm night, so +3 is already a live risk */
+.nc-ice{fill:#d8f0fa;opacity:.10}
+.nc-frost{fill:#7fc8e8;opacity:.06}
+.nc-freeze{stroke:#d8f0fa;stroke-width:1;stroke-opacity:.45;stroke-dasharray:3 3}
+.nc-freeze-lbl{font-family:'Space Mono',monospace;font-size:7.5px;fill:#d8f0fa;fill-opacity:.8}
 /* the next night is context, not the decision — mute it so tonight reads first */
-.night-group.later-night .night-label{color:var(--text3)}
-.night-group.later-night .hour-cell{background:transparent;border-style:dashed;opacity:.72}
-.night-group.later-night .hour-cell .htemp{font-weight:500;color:var(--text2)}
+.nc-later{opacity:.62}
+line.nc-base.nc-later{stroke-dasharray:2 3}
+/* axis: each night's hours sit under that night, sized by its share of the
+   chart, so a part-spent first night gets the narrow strip it deserves */
+.nc-axis{display:flex;align-items:flex-start}
+.nc-axis-seg{display:flex;flex-direction:column;gap:1px;min-width:0}
+/* 12/308 of the chart width — a px gap would drift as the panel scales */
+.nc-axis-gap{flex:0 0 3.9%}
+.nc-axis-night{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:5px;white-space:nowrap}
+.nc-axis-night::before{content:'';width:3px;height:9px;border-radius:2px;background:currentColor;flex-shrink:0}
+/* dropped because the segment is too narrow — hidden, not removed, so both
+   segments' hour rows stay on the same line */
+.nc-axis-night:empty{visibility:hidden}
+.nc-axis-seg.nc-later .nc-axis-night{color:var(--text3)}
+/* labels sit at their true fraction of the night, not evenly spaced */
+.nc-axis-hours{position:relative;height:12px;font-family:'Space Mono',monospace;font-size:9px;color:var(--text3)}
+.nc-axis-hours span{position:absolute;top:0;white-space:nowrap}
+/* ── card strip: the night as colour, gapless — a preview, not a readout ──
+   Own line, not a slot in the meta row: at 100% width it squeezed the text
+   beside it into two-line wraps. */
+.fog-strip{display:flex;height:7px;width:100%;border-radius:3px;overflow:hidden;margin-top:5px}
+.fog-strip i{flex:1}
 #legend{padding:10px 16px;border-top:1px solid var(--border)}
 .legend-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .legend-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text3)}
@@ -220,7 +248,12 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
   #bottom-sheet.peek { transform: translateY(calc(100% - 56px)); }
   #bottom-sheet.half { transform: translateY(40%); }
   #bottom-sheet.open { transform: translateY(0); }
-  #sheet-handle-bar { width: 40px; height: 4px; background: var(--border2); border-radius: 2px; margin: 10px auto 6px; flex-shrink: 0; cursor: grab; }
+  /* The grab target is the whole header (~52px tall), not the little bar — a
+     4px-tall hit area is unusable with a fingertip. touch-action:none stops the
+     browser claiming the vertical swipe as a page scroll and fighting the drag. */
+  #sheet-grab { flex-shrink: 0; cursor: grab; touch-action: none; -webkit-user-select: none; user-select: none; padding-bottom: 2px; }
+  #sheet-grab:active { cursor: grabbing; }
+  #sheet-handle-bar { width: 44px; height: 5px; background: var(--border2); border-radius: 3px; margin: 12px auto 8px; flex-shrink: 0; pointer-events: none; }
   #sheet-title { font-family: 'Space Mono',monospace; font-size: 12px; font-weight: 700; color: var(--text); padding: 0 16px 8px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; }
   #sheet-content { flex: 1; overflow-y: auto; padding: 0 16px 24px; }
   #sheet-content::-webkit-scrollbar { display: none; }
