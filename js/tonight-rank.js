@@ -35,14 +35,10 @@ export function rankRoads(entries, now) {
     .map(x => x.road);
 }
 
-export function reachable(road, maxMinutes) {
-  const dt = road.driveTimeFromHome;
-  const m = dt?.minutes;
-  if (typeof m === 'number') return m <= maxMinutes;
-  const km = dt?.km;
-  if (typeof km === 'number') {
-    const estMin = km * 1.2; // ~50 km/h estimate for the air-distance fallback
-    return estMin <= maxMinutes;
-  }
-  return false;
+// Reachable within maxKm by ROAD distance from home. Distance is the metric we
+// trust; the old version filtered on drive-time and, failing that, guessed
+// minutes from km at ~50 km/h — exactly the unreliable estimate we dropped.
+export function reachable(road, maxKm) {
+  const km = road.driveTimeFromHome?.km;
+  return typeof km === 'number' && km <= maxKm;
 }

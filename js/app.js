@@ -5,7 +5,7 @@
 
 import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGroup } from './map.js';
 import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
-import { createWeatherClient, fogBadge, calcFogScore, wmoDesc, nightFogRisk } from './weather.js';
+import { createWeatherClient, fogBadge, calcFogScore, wmoDesc, nightHours } from './weather.js';
 import { rankRoads, reachable, scoreRoad } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml } from './library.js';
 import {
@@ -164,8 +164,8 @@ async function renderTonight(container) {
   }));
   let ranked = rankRoads(entries, appState.now());
   const reachableOn = document.getElementById('tonight-reachable-toggle')?.checked;
-  const minMinutes = Number(document.getElementById('tonight-reachable-min')?.value) || 90;
-  if (reachableOn) ranked = ranked.filter(r => reachable(r, minMinutes));
+  const maxKm = Number(document.getElementById('tonight-reachable-km')?.value) || 100;
+  if (reachableOn) ranked = ranked.filter(r => reachable(r, maxKm));
 
   if (!ranked.length) {
     container.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:12px 0">No roads match.</div>';
@@ -270,18 +270,32 @@ function weatherHtml(fc) {
   const temp = H.temperature_2m[ni], rh = H.relative_humidity_2m[ni], dew = H.dew_point_2m[ni];
   const wind = H.windspeed_10m[ni], precip = H.precipitation_probability?.[ni] ?? 0, wcode = H.weathercode?.[ni];
   const fs = calcFogScore(fc, now), fb = fogBadge(fs), spread = (temp - dew).toFixed(1);
-  const cells = [];
-  for (let i = 0; i < H.time.length; i++) {
-    const t = new Date(H.time[i]); if (t < now) continue;
-    const h = t.getHours(); if (h < 20 && h > 6) continue;
-    const fr = Math.round(nightFogRisk(H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]));
-    cells.push(`<div class="hour-cell" title="Fog risk ${fr}%"><div class="htime">${String(h).padStart(2, '0')}h</div><div class="htemp">${Math.round(H.temperature_2m[i])}°</div><div class="hfog" style="background:${fogColor(fr)}"></div><div class="hfog-pct">${fr}</div></div>`);
-    if (cells.length >= 14) break;
+  // Group the upcoming night hours into nights (20:00→06:00) so the strip shows
+  // a clear break where one night ends and the next begins. Same source the
+  // headline badge scores from, so the dots and the badge always agree.
+  const groups = [];
+  for (const h of nightHours(fc, now)) {
+    const last = groups[groups.length - 1];
+    if (!last || last.key !== h.key) groups.push({ key: h.key, hours: [h] });
+    else last.hours.push(h);
   }
+  const cell = (h) => `<div class="hour-cell" title="Fog risk ${h.risk}%"><div class="htime">${String(h.hour).padStart(2, '0')}h</div><div class="htemp">${Math.round(h.temp)}°</div><div class="hfog" style="background:${fogColor(h.risk)}"></div><div class="hfog-pct">${h.risk}</div></div>`;
+  const nightLabel = (key, idx) => {
+    if (idx === 0) return 'Tonight';
+    const d = new Date(`${key}T20:00:00`);
+    // en-GB explicitly: the rest of the UI is English, and the browser locale
+    // would otherwise mix a Slovak weekday into "št night".
+    return isNaN(d.getTime()) ? 'Next night' : `${d.toLocaleDateString('en-GB', { weekday: 'short' })} night`;
+  };
+  const strip = groups.slice(0, 2).map((g, gi) => `
+      <div class="night-group${gi ? ' later-night' : ''}">
+        <div class="night-label">${nightLabel(g.key, gi)}</div>
+        <div class="night-cells">${g.hours.map(cell).join('')}</div>
+      </div>`).join('<div class="night-sep" aria-hidden="true"></div>');
   return `
     <div class="weather-now">
       <div class="weather-main"><div class="temp-big">${Math.round(temp)}°C</div><div class="weather-desc">${wmoDesc(wcode)}</div></div>
-      <span class="fog-badge ${fb.cls}">FOG: ${fb.lbl}</span>
+      <span class="fog-badge ${fb.cls}">FOG TONIGHT: ${fb.lbl}</span>
     </div>
     <div class="weather-details">
       <div class="w-detail"><div class="wlbl">Humidity</div><div class="wval">${Math.round(rh)}%</div></div>
@@ -289,10 +303,10 @@ function weatherHtml(fc) {
       <div class="w-detail"><div class="wlbl">Wind</div><div class="wval">${Math.round(wind)} km/h</div></div>
       <div class="w-detail"><div class="wlbl">Rain Prob</div><div class="wval">${Math.round(precip)}%</div></div>
       <div class="w-detail"><div class="wlbl">Dew Spread</div><div class="wval">${spread}°C</div></div>
-      <div class="w-detail"><div class="wlbl">Fog Score</div><div class="wval">${Math.round(fs)}/100</div></div>
+      <div class="w-detail"><div class="wlbl">Fog peak tonight</div><div class="wval">${Math.round(fs)}/100</div></div>
     </div>
-    <div class="hourly-title">Tonight 20:00–06:00 · dot = fog risk</div>
-    <div class="hourly-grid">${cells.join('') || '<span style="font-size:11px;color:var(--text3)">No night hours in window</span>'}</div>`;
+    <div class="hourly-title">By hour, 20:00–06:00 · number = fog risk %</div>
+    <div class="hourly-grid">${strip || '<span style="font-size:11px;color:var(--text3)">No night hours in window</span>'}</div>`;
 }
 
 async function fillInspectorWeather(road) {
@@ -615,7 +629,7 @@ function wireChrome() {
   document.getElementById('library-sort')?.addEventListener('change', () => { if (currentView === 'library') refreshCurrentView(); });
   document.getElementById('tonight-refresh')?.addEventListener('click', () => { appState.weatherClient.clear(); if (currentView === 'tonight') refreshCurrentView(); });
   document.getElementById('tonight-reachable-toggle')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
-  document.getElementById('tonight-reachable-min')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
+  document.getElementById('tonight-reachable-km')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
 }
 
 // Read roads (decrypting if needed) and render. Returns true on success; on a

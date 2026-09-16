@@ -86,7 +86,7 @@
           <select class="search-input" id="library-sort" style="flex:0 0 110px">
             <option value="name">Name</option>
             <option value="km">Length</option>
-            <option value="driveTime">Drive time</option>
+            <option value="distance">Distance</option>
             <option value="created">Newest</option>
           </select>
         </div>
@@ -101,10 +101,10 @@
         </div>
         <div style="padding:10px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)">
           <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2)">
-            <input type="checkbox" id="tonight-reachable-toggle"> Reachable tonight within
+            <input type="checkbox" id="tonight-reachable-toggle"> Within
           </label>
-          <input type="number" id="tonight-reachable-min" value="90" min="5" step="5" style="width:56px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:3px 6px;font-size:11px">
-          <span style="font-size:11px;color:var(--text3)">min</span>
+          <input type="number" id="tonight-reachable-km" value="100" min="10" step="10" style="width:56px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:3px 6px;font-size:11px">
+          <span style="font-size:11px;color:var(--text3)">km of home</span>
         </div>
         <div id="tonight-list" style="flex:1;overflow-y:auto;padding:8px 16px"></div>
       </div>

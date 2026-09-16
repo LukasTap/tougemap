@@ -37,13 +37,15 @@ export function metaChipsHtml(meta) {
 }
 
 export function roadCardHtml(road, { fogScore = null } = {}) {
-  const dt = road.driveTimeFromHome?.minutes != null ? `${road.driveTimeFromHome.minutes} min` : '—';
+  // Distance by road (km) is the metric we trust — drive-time is unreliable on
+  // the SK network, so it stays a subnote in the inspector and never appears here.
+  const dh = road.driveTimeFromHome?.km != null ? `${road.driveTimeFromHome.km} km from home` : '— from home';
   const fog = fogScore != null ? (b => `<span class="fog-badge ${b.cls}">${b.lbl}</span>`)(fogBadge(fogScore)) : '';
   return `
     <div class="road-lib-item" data-id="${road.id}">
       ${thumbnailSvg(road.points)}
       <div class="road-lib-name">${escapeHtml(road.name)}</div>
-      <div class="road-lib-meta"><span>${road.km} km</span><span>${dt} from home</span>${fog}</div>
+      <div class="road-lib-meta"><span>${road.km} km long</span><span>${dh}</span>${fog}</div>
       <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
     </div>`;
 }
@@ -53,17 +55,17 @@ export function sortRoads(roads, key) {
     name: (a, b) => a.name.localeCompare(b.name),
     km: (a, b) => b.km - a.km,
     created: (a, b) => (b.created || '').localeCompare(a.created || ''),
-    driveTime: (a, b) => (a.driveTimeFromHome?.minutes ?? Infinity) - (b.driveTimeFromHome?.minutes ?? Infinity)
+    distance: (a, b) => (a.driveTimeFromHome?.km ?? Infinity) - (b.driveTimeFromHome?.km ?? Infinity)
   };
   return roads.slice().sort(by[key] || by.name);
 }
 
-export function filterRoads(roads, { q = '', character = null, pavement = null, deer = null, reachableMin = null } = {}) {
+export function filterRoads(roads, { q = '', character = null, pavement = null, deer = null, reachableKm = null } = {}) {
   const ql = q.trim().toLowerCase();
   return roads.filter(r =>
     (!ql || r.name.toLowerCase().includes(ql)) &&
     (!character || r.meta.character === character) &&
     (!pavement || r.meta.pavement === pavement) &&
     (!deer || r.meta.deer === deer) &&
-    (reachableMin == null || (r.driveTimeFromHome?.minutes ?? Infinity) <= reachableMin));
+    (reachableKm == null || (r.driveTimeFromHome?.km ?? Infinity) <= reachableKm));
 }

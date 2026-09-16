@@ -2,25 +2,54 @@
 import { gridCellKey } from './geo.js';
 import { fetchWithTimeout } from './http.js';
 
-export function calcFogScore(d, now) {
-  let max = 0;
-  for (let i = 0; i < d.hourly.time.length; i++) {
-    const t = new Date(d.hourly.time[i]);
-    if (t <= now) continue;
-    const h = t.getHours();
-    if (h < 20 && h > 6) continue;
-    const spread = d.hourly.temperature_2m[i] - d.hourly.dew_point_2m[i];
-    const rh = d.hourly.relative_humidity_2m[i];
-    const wind = d.hourly.windspeed_10m[i];
-    let risk = 0;
-    if (spread <= 1) risk += 40; else if (spread <= 2) risk += 30; else if (spread <= 4) risk += 15;
-    if (rh > 95) risk += 25; else if (rh > 90) risk += 15; else if (rh > 85) risk += 5;
-    if (wind < 5) risk += 15; else if (wind < 10) risk += 5;
-    if (h >= 2 && h <= 6) risk += 10;
-    max = Math.max(max, risk);
-    if (i > 24) break;
+// ── NIGHT WINDOWING ─────────────────────────────────────────────────────────
+// A "night" runs 20:00 → 06:00 and is keyed by the date it STARTED on, so
+// 23:00 Wed and 04:00 Thu belong to the same night.
+function dateKey(d) {
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+
+export function nightKeyOf(t) {
+  const h = t.getHours();
+  if (h >= 20) return dateKey(t);
+  if (h <= 6) { const d = new Date(t); d.setDate(d.getDate() - 1); return dateKey(d); }
+  return null; // daytime — not part of any night
+}
+
+// Upcoming night hours, each with its per-hour fog risk. This is THE single
+// source that both the headline badge and the hourly strip read, so the two
+// can never drift apart again.
+export function nightHours(d, now) {
+  const H = d.hourly;
+  const out = [];
+  for (let i = 0; i < H.time.length; i++) {
+    const t = new Date(H.time[i]);
+    if (t < now) continue;
+    const key = nightKeyOf(t);
+    if (!key) continue;
+    out.push({
+      t, key,
+      hour: t.getHours(),
+      temp: H.temperature_2m[i],
+      risk: Math.round(nightFogRisk(
+        H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]))
+    });
   }
-  return Math.min(100, max);
+  return out;
+}
+
+// Headline fog score = the WORST hour of the first upcoming night, using the
+// exact same per-hour formula as the strip dots.
+//
+// It previously used a second, unrelated scoring formula (additive buckets) over
+// a window truncated at array index 24 — so the badge routinely disagreed with
+// the dots, and when checked during the day it missed 01:00–06:00 entirely,
+// which is exactly when fog actually forms.
+export function calcFogScore(d, now) {
+  const hours = nightHours(d, now);
+  if (!hours.length) return 0;
+  const firstNight = hours[0].key;
+  return hours.reduce((max, h) => (h.key === firstNight ? Math.max(max, h.risk) : max), 0);
 }
 
 export function fogBadge(s) {

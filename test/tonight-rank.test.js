@@ -30,8 +30,11 @@ test('rankRoads puts clear-night road first, forecastless road last', () => {
   assert.deepEqual(ranked.map(r => r.id), [1, 2, 3]);
 });
 
-test('reachable respects cached drive-time', () => {
-  assert.equal(reachable({ driveTimeFromHome: { minutes: 40 } }, 60), true);
-  assert.equal(reachable({ driveTimeFromHome: { minutes: 80 } }, 60), false);
-  assert.equal(reachable({ driveTimeFromHome: null }, 60), false);
+test('reachable filters by road distance (km) from home', () => {
+  assert.equal(reachable({ driveTimeFromHome: { km: 40 } }, 100), true);
+  assert.equal(reachable({ driveTimeFromHome: { km: 180 } }, 100), false);
+  assert.equal(reachable({ driveTimeFromHome: { km: 100 } }, 100), true); // boundary inclusive
+  assert.equal(reachable({ driveTimeFromHome: null }, 100), false);
+  // drive-time alone is no longer enough — km is the metric
+  assert.equal(reachable({ driveTimeFromHome: { minutes: 30 } }, 100), false);
 });

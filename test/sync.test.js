@@ -1,10 +1,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { rawUrl, encodeContent } from '../js/sync.js';
+import { REPO } from '../js/config.js';
 
-test('rawUrl composes correctly', () => {
-  const cfg = { owner: 'lt', repo: 'tougemap', branch: 'main', path: 'roads.json' };
-  assert.equal(rawUrl(cfg), 'https://raw.githubusercontent.com/lt/tougemap/main/roads.json');
+// rawUrl takes no argument any more — the repo coordinates live in config.js.
+test('rawUrl composes from config REPO', () => {
+  assert.equal(rawUrl(), `https://raw.githubusercontent.com/${REPO.owner}/${REPO.repo}/${REPO.branch}/${REPO.path}`);
 });
 
 test('encodeContent round-trips through base64 (incl. non-ASCII)', () => {

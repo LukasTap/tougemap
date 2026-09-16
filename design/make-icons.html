@@ -1,0 +1,46 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>TougeMap icon renderer</title></head>
+<body style="background:#0a0c0e;color:#e8eaf0;font-family:monospace;padding:20px">
+<div id="out">rendering…</div>
+<script>
+// Direction C — Ridge. Full-bleed square (no baked rounded corners): iOS and
+// Android apply their own mask, and a transparent/rounded source composites
+// badly. Art sits well inside a circle mask, so adaptive cropping is safe.
+const SVG = `<svg xmlns="http://www.w3.org/2000/svg" width="512" height="512" viewBox="0 0 512 512">
+  <rect width="512" height="512" fill="#0a0c0e"/>
+  <path d="M104 396 L256 152 L408 396 Z" fill="#1e232b"/>
+  <path d="M104 396 L256 152 L408 396" fill="none" stroke="#3a4455" stroke-width="10" stroke-linejoin="round" stroke-linecap="round"/>
+  <path d="M176 386 L306 330 L206 276 L300 232" fill="none" stroke="#e8a020" stroke-width="30" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>`;
+
+function renderPng(px) {
+  return new Promise((res, rej) => {
+    const img = new Image();
+    img.onload = () => {
+      const c = document.createElement('canvas');
+      c.width = px; c.height = px;
+      const ctx = c.getContext('2d');
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = 'high';
+      ctx.drawImage(img, 0, 0, px, px);
+      res(c.toDataURL('image/png'));
+    };
+    img.onerror = () => rej(new Error('svg failed to load'));
+    img.src = 'data:image/svg+xml;charset=utf-8,' + encodeURIComponent(SVG);
+  });
+}
+
+window.buildIcons = async () => {
+  const log = [];
+  for (const [px, name] of [[512, 'icon-512.png'], [192, 'icon-192.png']]) {
+    const url = await renderPng(px);
+    const r = await fetch('/save?name=' + name, { method: 'POST', body: url });
+    log.push(await r.text());
+  }
+  document.getElementById('out').textContent = log.join(' | ');
+  return log.join(' | ');
+};
+</script>
+</body>
+</html>

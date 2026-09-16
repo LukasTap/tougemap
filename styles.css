@@ -61,14 +61,29 @@ html,body{height:100%;overflow:hidden;background:var(--bg);color:var(--text);fon
 .w-detail .wlbl{font-size:10px;color:var(--text3);margin-bottom:2px}
 .w-detail .wval{color:var(--text);font-weight:500;font-family:'Space Mono',monospace;font-size:12px}
 .hourly-title{font-size:10px;letter-spacing:2px;color:var(--text3);text-transform:uppercase;margin-bottom:8px}
-.hourly-grid{display:flex;gap:4px;overflow-x:auto;padding-bottom:6px}
-.hourly-grid::-webkit-scrollbar{height:3px}
-.hourly-grid::-webkit-scrollbar-thumb{background:var(--border2)}
-.hour-cell{min-width:44px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 4px;text-align:center;flex-shrink:0}
+/* Nights stack VERTICALLY: side-by-side would push the second night (and the
+   divider) off the edge of a ~340px panel, so you'd have to scroll to find the
+   very break that's meant to be glanceable. Each night scrolls on its own. */
+.hourly-grid{display:flex;flex-direction:column;gap:7px;padding-bottom:6px}
+.night-cells::-webkit-scrollbar{height:3px}
+.night-cells::-webkit-scrollbar-thumb{background:var(--border2)}
+.hour-cell{min-width:46px;background:var(--surface2);border:1px solid var(--border);border-radius:4px;padding:6px 4px;text-align:center;flex-shrink:0}
 .hour-cell.highlighted{background:var(--surface3);border-color:var(--accent)}
 .hour-cell .htime{font-family:'Space Mono',monospace;font-size:9px;color:var(--text3)}
 .hour-cell .htemp{font-size:13px;font-weight:600;color:var(--text);margin:3px 0}
-.hour-cell .hfog{width:8px;height:8px;border-radius:50%;margin:2px auto 0}
+.hour-cell .hfog{width:8px;height:8px;border-radius:50%;margin:3px auto 0}
+.hour-cell .hfog-pct{font-family:'Space Mono',monospace;font-size:9px;color:var(--text2);margin-top:3px}
+/* ── night grouping: one labelled row per night, divider between them ── */
+.night-group{display:flex;flex-direction:column;gap:4px}
+.night-cells{display:flex;gap:4px;overflow-x:auto;padding-bottom:2px}
+.night-label{font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1.5px;text-transform:uppercase;color:var(--accent);display:flex;align-items:center;gap:6px}
+/* a short accent tick before the label so the row break reads at a glance */
+.night-label::before{content:'';width:3px;height:10px;border-radius:2px;background:currentColor;flex-shrink:0}
+.night-sep{height:0;border-top:1px dashed var(--border2);margin:1px 0}
+/* the next night is context, not the decision — mute it so tonight reads first */
+.night-group.later-night .night-label{color:var(--text3)}
+.night-group.later-night .hour-cell{background:transparent;border-style:dashed;opacity:.72}
+.night-group.later-night .hour-cell .htemp{font-weight:500;color:var(--text2)}
 #legend{padding:10px 16px;border-top:1px solid var(--border)}
 .legend-row{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
 .legend-item{display:flex;align-items:center;gap:5px;font-size:10px;color:var(--text3)}
