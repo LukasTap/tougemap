@@ -139,6 +139,17 @@ export const CHART = Object.freeze({
   tickEnd: 105
 });
 
+// The fog plot deliberately has NO gridline, unlike temperature.
+//
+// Temperature needs one because its scale floats — it is auto-ranged to the
+// night, so a height means nothing until a line says what. Fog is pinned to an
+// absolute 0-100 with the baseline at zero, so a reference line only restated
+// what the plot already implied — and it could not do even that legibly: the
+// whole range is 44 units, so 35% sits 6.6 units under a 50% line, of which 1.75
+// is the two strokes' own ink. At a glance it read as touching, right through
+// the 25-50% band where most nights actually sit. Severity is carried by colour
+// (absolute and calibrated) and exact values by the scrubber.
+
 // Ice thresholds, in °C. Zero is where water freezes; +3 is where the ROAD can
 // be freezing while the air is not — tarmac radiates heat to a clear sky faster
 // than the air above it, and bridges and shaded valley floors go first.
@@ -160,6 +171,20 @@ export function inDriveWindow(hour) {
 }
 
 const clamp = (v, lo, hi) => Math.max(lo, Math.min(hi, v));
+
+// Every plotted hour across both nights, in x order — the index a scrubbing
+// cursor hit-tests against.
+export function scrubPoints(chart) {
+  return chart ? chart.segments.flatMap(s => s.points) : [];
+}
+
+// Nearest plotted hour to a position on the chart. Snaps rather than
+// interpolating: the forecast IS hourly, and a reading between two hours would
+// be a number the data never contained.
+export function nearestScrubPoint(points, x) {
+  if (!points || !points.length) return null;
+  return points.reduce((best, p) => (Math.abs(p.x - x) < Math.abs(best.x - x) ? p : best), points[0]);
+}
 
 // Which hours get a label under a night, given how wide an hour is.
 //
@@ -244,6 +269,13 @@ export function buildNightChart(groups, geom = CHART) {
     return {
       key: g.key,
       hours: g.hours,
+      // Every plotted hour with its screen position, so hovering can hit-test
+      // against real data instead of the view re-deriving the geometry.
+      points: g.hours.map((h, i) => ({
+        x: xs[i], night: gi, hour: h.hour,
+        risk: h.risk, temp: h.temp,
+        fogY: r1(yFog(h.risk)), tmpY: r1(yTmp(h.temp))
+      })),
       x0: xs[0], x1: xs[xs.length - 1],
       drive: wa < 0 ? null : { x0: xs[wa], x1: xs[wb], width: r1(xs[wb] - xs[wa]) },
       fogLine,

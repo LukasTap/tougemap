@@ -7,7 +7,8 @@ import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGr
 import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
 import {
   createWeatherClient, wmoDesc, nightHours, nightGroups, nightExtremes, decisionHours,
-  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, DRIVE_FROM, DRIVE_TO
+  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, DRIVE_FROM, DRIVE_TO,
+  scrubPoints, nearestScrubPoint
 } from './weather.js';
 import { rankRoads, reachable } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
@@ -294,9 +295,11 @@ function nightChartHtml(chart) {
     : '').join('');
   // Temperature needs a readable scale of its own — without it the curve only
   // says "down, and white at the bottom".
+  // Temperature only: its scale is auto-ranged, so a height means nothing until
+  // a line says what. Fog is pinned to an absolute 0–100 and needs none.
   const tmpGrid = temp.ticks.map(t =>
-    `<line class="nc-tmp-grid" x1="0" y1="${t.y}" x2="${geom.w}" y2="${t.y}"/>` +
-    `<text class="nc-tmp-lbl" x="${geom.w}" y="${t.y - 2}" text-anchor="end">${t.v}°</text>`).join('');
+    `<line class="nc-grid" x1="0" y1="${t.y}" x2="${geom.w}" y2="${t.y}"/>` +
+    `<text class="nc-grid-lbl" x="${geom.w}" y="${t.y - 2}" text-anchor="end">${t.v}°</text>`).join('');
   const bands =
     (temp.frostHeight > 0 ? `<rect class="nc-frost" x="0" y="${temp.frostY}" width="${geom.w}" height="${temp.frostHeight}"/>` : '') +
     (temp.iceHeight > 0 ? `<rect class="nc-ice" x="0" y="${temp.freezeY}" width="${geom.w}" height="${temp.iceHeight}"/>` : '') +
@@ -314,7 +317,7 @@ function nightChartHtml(chart) {
   }).join('');
   const first = segments[0];
   return `<svg class="night-chart" viewBox="0 0 ${geom.w} ${geom.h}" xmlns="http://www.w3.org/2000/svg" role="img">
-      <title>Fog and temperature by hour, 20:00–06:00; the shaded stretch is ${DRIVE_FROM}:00–0${DRIVE_TO}:00, the hours actually driven. Tonight's fog peaks at ${first.peak.risk}% around ${hh(first.peak.hour)}:00.</title>
+      <title>Fog and temperature by hour, 20:00–06:00</title>
       <defs>
         <linearGradient id="ncFogStroke" x1="0" y1="${geom.fogBase}" x2="0" y2="${geom.fogTop}" gradientUnits="userSpaceOnUse">
           <stop offset="0" stop-color="#3ecf6e"/><stop offset=".30" stop-color="#3ecf6e"/>
@@ -342,6 +345,11 @@ function nightChartHtml(chart) {
       ${tickMarks}
       ${plots}
       ${breakMarks}
+      <g class="nc-scrub" aria-hidden="true">
+        <line class="nc-scrub-line" y1="0" y2="${geom.tickEnd}"/>
+        <circle class="nc-scrub-dot nc-scrub-fog" r="3.5"/>
+        <circle class="nc-scrub-dot nc-scrub-tmp" r="3"/>
+      </g>
     </svg>`;
 }
 
@@ -397,7 +405,7 @@ function weatherHtml(fc) {
   const now = appState.now();
   const H = fc.hourly;
   const ni = H.time.findIndex(t => new Date(t) > now);
-  if (ni < 0) return '<div style="font-size:11px;color:var(--text3)">No forecast.</div>';
+  if (ni < 0) return { html: '<div style="font-size:11px;color:var(--text3)">No forecast.</div>', chart: null };
   const temp = H.temperature_2m[ni], wcode = H.weathercode?.[ni];
   const groups = nightGroups(nightHours(fc, now));
   const chart = buildNightChart(groups);
@@ -416,16 +424,69 @@ function weatherHtml(fc) {
     tile('Calmest wind', `${Math.round(ext.calmest.wind)} km/h`, `${hh(ext.calmest.hour)}h`),
     tile('Rain peak', `${Math.round(ext.wettest.precip)}%`, ext.wettest.precip > 0 ? `${hh(ext.wettest.hour)}h` : '')
   ].join('') : '';
-  return `
+  const html = `
     <div class="weather-now">
       <div class="weather-main"><div class="temp-big">${Math.round(temp)}°C</div><div class="weather-desc">${wmoDesc(wcode)}</div></div>
     </div>
-    <div class="hourly-title">Fog above · temperature below</div>
+    <div class="hourly-title" data-resting="Fog above · temperature below">Fog above · temperature below</div>
     ${chart
       ? `<div class="night-chart-wrap">${nightChartHtml(chart)}<div class="nc-axis">${axisHtml(chart.segments, chart.hourW)}</div></div>`
       : '<div style="font-size:11px;color:var(--text3);padding:4px 0 8px">No night hours in window</div>'}
     ${scope ? `<div class="hourly-title tiles-scope">${scope}</div>` : ''}
     <div class="weather-details">${tiles}</div>`;
+  return { html, chart };
+}
+
+// Scrubbing: a vertical line that follows the cursor, snapped to the nearest
+// hour, reading both curves at that moment.
+//
+// The readout replaces the chart's own heading rather than floating near the
+// cursor — a tooltip would cover the curve it describes, and on a phone your
+// finger is already sitting on top of it.
+function wireScrub(root, chart) {
+  const svg = root.querySelector('.night-chart');
+  const head = root.querySelector('.hourly-title');
+  const group = root.querySelector('.nc-scrub');
+  if (!svg || !head || !group) return;
+  const line = group.querySelector('.nc-scrub-line');
+  const fogDot = group.querySelector('.nc-scrub-fog');
+  const tmpDot = group.querySelector('.nc-scrub-tmp');
+  const points = scrubPoints(chart);
+  if (!points.length) return;
+  // Restore text comes from the template, not from whatever the heading happens
+  // to say when this runs — reading the DOM here would capture a live readout as
+  // the resting state if the chart were ever re-wired without re-rendering.
+  const resting = head.dataset.resting || head.textContent;
+
+  const show = (clientX) => {
+    const r = svg.getBoundingClientRect();
+    if (!r.width) return;
+    const p = nearestScrubPoint(points, ((clientX - r.left) / r.width) * chart.geom.w);
+    if (!p) return;
+    line.setAttribute('x1', p.x); line.setAttribute('x2', p.x);
+    fogDot.setAttribute('cx', p.x); fogDot.setAttribute('cy', p.fogY);
+    fogDot.setAttribute('fill', fogColor(p.risk));
+    tmpDot.setAttribute('cx', p.x); tmpDot.setAttribute('cy', p.tmpY);
+    group.classList.add('on');
+    const night = p.night ? nightLabel(chart.segments[p.night].key, p.night).replace(' night', '') + ' ' : '';
+    head.textContent = `${night}${hh(p.hour)}:00 · fog ${p.risk}% · ${Math.round(p.temp)}°C`;
+    head.classList.add('nc-readout');
+  };
+  const clear = () => {
+    group.classList.remove('on');
+    head.textContent = resting;
+    head.classList.remove('nc-readout');
+  };
+
+  svg.addEventListener('mousemove', e => show(e.clientX));
+  svg.addEventListener('mouseleave', clear);
+  // Touch: `touch-action: pan-y` on the chart hands vertical drags to the sheet
+  // and horizontal ones to us, so scrubbing cannot swallow a scroll. The line
+  // stays put after the finger lifts — on a phone the reading is the point, and
+  // it was under your fingertip the whole time it was being made.
+  svg.addEventListener('touchstart', e => show(e.touches[0].clientX), { passive: true });
+  svg.addEventListener('touchmove', e => show(e.touches[0].clientX), { passive: true });
+  svg.addEventListener('touchcancel', clear);
 }
 
 async function fillInspectorWeather(road) {
@@ -435,8 +496,10 @@ async function fillInspectorWeather(road) {
   if (!mid) { el.textContent = 'No location data.'; return; }
   try {
     const fc = await appState.weatherClient.get(mid.lat, mid.lon);
+    const { html, chart } = weatherHtml(fc);
     el.className = '';
-    el.innerHTML = weatherHtml(fc);
+    el.innerHTML = html;
+    if (chart) wireScrub(el, chart);
   } catch { el.textContent = 'Forecast unavailable.'; }
 }
 
