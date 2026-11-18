@@ -7,6 +7,7 @@ import { map, savedGroup } from './map.js';
 import { route, nearestPoint, airFallback } from './routing.js';
 import { polylineKm } from './geo.js';
 import { normalizeRoad } from './store.js';
+import { computeTerrain } from './terrain.js';
 
 const SAVED_COLOR = '#b000ff'; // saved roads always render deep purple (no per-road color in v2)
 
@@ -303,6 +304,9 @@ export async function saveRoad(name, points, appState) {
   });
   const home = appState.data.home;
   if (home) road.driveTimeFromHome = await driveTimeFrom(home, road.points);
+  // Elevation profile for multi-point weather (terrain.js). If the service is
+  // down the road is saved without it; the next load's backfill adds it.
+  try { const t = await computeTerrain(road.points); if (t) road.terrain = t; } catch { /* later */ }
   await appState.repo.commit(appState.auth, next => { next.roads.push(road); });
   resetRouteUI();
   renderSavedRoads(appState);

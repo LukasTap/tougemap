@@ -8,10 +8,11 @@ import { loadAuth, saveToken, savePassphrase, forgetDevice } from './sync.js';
 import { createRepo } from './repo.js';
 import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
 import {
-  createWeatherClient, wmoDesc, nightHours, nightGroups, nightExtremes, decisionHours,
-  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W,
+  createWeatherClient, wmoDesc, nightGroups, nightExtremes, decisionHours, firstNight,
+  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, roadConditions, currentReadings,
   scrubPoints, nearestScrubPoint
 } from './weather.js';
+import { roadProfile, pickWeatherPoints, needsTerrain, computeTerrain } from './terrain.js';
 import { rankRoads, reachable } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
 import {
@@ -35,6 +36,57 @@ export const appState = {
   now: () => new Date()
 };
 
+// A road's conditions: forecasts at its start, end, summit and low point
+// (terrain.js), combined hour by hour into the worst case (weather.js).
+// Forecasts are cached in memory, so asking again for the same road is cheap.
+// Resolves to null when no forecast is available.
+async function conditionsFor(road) {
+  if (!road.points?.length) return null;
+  const points = pickWeatherPoints(roadProfile(road));
+  const forecasts = await Promise.all(points.map(p => appState.weatherClient.get(p.lat, p.lon).catch(() => null)));
+  return roadConditions(points, forecasts, appState.now());
+}
+
+// ── ONE-TIME ELEVATION BACKFILL (the device that can save) ──────────────────
+// Roads saved before elevation profiles existed get one, a road at a time, at a
+// pace well inside Open-Meteo's 600-coordinates-a-minute allowance (each road
+// is 50). Saved in small batches so progress survives closing the tab; anything
+// left (rate limit, offline) is picked up on the next load. Phones never do
+// this — they read the profiles from roads.json.
+const TERRAIN_PACE_MS = 7000;   // ~430 coordinates a minute, leaving room for forecasts
+const TERRAIN_SAVE_EVERY = 8;
+let terrainBackfilling = false;
+const pause = (ms) => new Promise(r => setTimeout(r, ms));
+
+async function backfillTerrain() {
+  if (terrainBackfilling || repo.writeBlock(appState.auth)) return;
+  const todo = appState.data.roads.filter(needsTerrain);
+  if (!todo.length) return;
+  terrainBackfilling = true;
+  const done = new Map();
+  const save = async () => {
+    if (!done.size) return;
+    const batch = new Map(done);
+    await repo.commit(appState.auth, next => {
+      for (const r of next.roads) if (batch.has(r.id) && needsTerrain(r)) r.terrain = batch.get(r.id);
+    });
+    for (const id of batch.keys()) done.delete(id);
+    renderSavedRoads(appState);
+    refreshCurrentView();
+  };
+  try {
+    for (let i = 0; i < todo.length; i++) {
+      if (i) await pause(TERRAIN_PACE_MS);
+      setStatusBanner(`Adding elevation profiles to your roads (one-time): ${i + 1} of ${todo.length}…`, 'info');
+      try { const t = await computeTerrain(todo[i].points); if (t) done.set(todo[i].id, t); }
+      catch { break; } // rate-limited or offline — the rest waits for the next load
+      if (done.size >= TERRAIN_SAVE_EVERY) await save();
+    }
+    await save();
+  } catch { /* save refused (conflict, offline): computed again next load */ }
+  finally { terrainBackfilling = false; updateStatusBanner(); }
+}
+
 let currentView = 'library';
 const VIEW_NAMES = { library: 'Library', tonight: 'Tonight', nearme: 'Near Me', discover: 'Discover' };
 let placingHome = false;
@@ -47,9 +99,6 @@ async function discoverCacheRead(key) {
 }
 const discoverCacheWrite = (key, collections) =>
   idbPut(DISCOVER_DB, DISCOVER_STORE, key, { ts: Date.now(), collections });
-
-// ── HELPERS ──────────────────────────────────────────────────────────────────
-function midpoint(road) { return road.points[Math.floor(road.points.length / 2)]; }
 
 // ── WRITE GUARD ──────────────────────────────────────────────────────────────
 // The repo refuses writes when they can't succeed (offline, no token, library
@@ -130,15 +179,13 @@ function renderLibrary(container, seq) {
   }
   container.innerHTML = roads.map(r => roadCardHtml(r)).join('');
   wireCardClicks(container, roads);
-  // Per-card fog strip, fetched lazily (grid-deduped/cached by weatherClient).
+  // Per-card fog strip, filled in as each road's conditions arrive.
   for (const r of roads) {
-    const mid = midpoint(r);
-    if (!mid) continue;
-    appState.weatherClient.get(mid.lat, mid.lon).then(fc => {
-      if (!isCurrent(seq)) return;
+    conditionsFor(r).then(cond => {
+      if (!cond || !isCurrent(seq)) return;
       const metaEl = container.querySelector(`.road-lib-item[data-id="${r.id}"] .road-lib-meta`);
       if (!metaEl || metaEl.parentElement.querySelector('.fog-strip')) return;
-      metaEl.insertAdjacentHTML('afterend', fogStripHtml(tonightRisks(fc, appState.now())));
+      metaEl.insertAdjacentHTML('afterend', fogStripHtml(tonightRisks(cond.hours)));
     }).catch(() => {});
   }
 }
@@ -180,14 +227,10 @@ async function renderTonight(container, seq) {
   wireTonightBar(container);
   const results = container.querySelector('[data-t="results"]');
   const roads = appState.data.roads;
-  const entries = await Promise.all(roads.map(async road => {
-    const mid = midpoint(road);
-    if (!mid) return { road, forecast: null };
-    try { return { road, forecast: await appState.weatherClient.get(mid.lat, mid.lon) }; }
-    catch { return { road, forecast: null }; }
-  }));
+  const entries = await Promise.all(roads.map(async road =>
+    ({ road, conditions: await conditionsFor(road).catch(() => null) })));
   if (!isCurrent(seq)) return; // the user moved on while forecasts loaded
-  let ranked = rankRoads(entries, appState.now());
+  let ranked = rankRoads(entries);
   if (tonightOpts.reach) ranked = ranked.filter(r => reachable(r, tonightOpts.km));
 
   if (!ranked.length) {
@@ -196,7 +239,7 @@ async function renderTonight(container, seq) {
     const byId = new Map(entries.map(e => [e.road.id, e]));
     results.innerHTML = ranked.map(road => {
       const entry = byId.get(road.id);
-      const risks = entry?.forecast ? tonightRisks(entry.forecast, appState.now()) : null;
+      const risks = entry?.conditions ? tonightRisks(entry.conditions.hours) : null;
       const dist = road.driveTimeFromHome?.km != null ? `<span>${road.driveTimeFromHome.km} km away</span>` : '';
       return `<div class="road-lib-item" data-id="${escapeHtml(road.id)}">
         ${thumbnailSvg(road.points)}
@@ -421,44 +464,90 @@ function axisHtml(segments, hourW) {
   }).join('<div class="nc-axis-gap" aria-hidden="true"></div>');
 }
 
-// Full weather panel: current conditions, the night chart, and four night-scoped
-// tiles. Humidity / dew point / dew spread used to sit here as current-hour
-// readings — they are the ingredients calcFogScore is cooked from, so printing
-// them beside the score was the recipe next to the dish.
-function weatherHtml(fc) {
+// The road's height along its length, with each forecast point marked in the
+// colour of its own worst fog — so "which end is the problem" is visible before
+// any number is read. A flat road isn't stretched into fake mountains: the
+// vertical scale never shows less than 50 m.
+function profileSvg(profile, pointStats) {
+  const s = (profile || []).filter(p => typeof p.ele === 'number');
+  if (s.length < 2) return '';
+  const W = 308, H = 40, top = 5, bottom = 3;
+  const total = s[s.length - 1].km || 1;
+  const eles = s.map(p => p.ele);
+  const lo = Math.min(...eles), hi = Math.max(...eles), span = Math.max(hi - lo, 50);
+  const x = (km) => +((km / total) * W).toFixed(1);
+  const y = (e) => +(top + (1 - (e - lo) / span) * (H - top - bottom)).toFixed(1);
+  const line = 'M' + s.map(p => `${x(p.km)} ${y(p.ele)}`).join(' L');
+  const marks = pointStats.filter(p => typeof p.ele === 'number').map(p =>
+    `<circle cx="${x(p.km)}" cy="${y(p.ele)}" r="3.4" fill="${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}" class="pf-mark"/>`).join('');
+  return `<svg class="profile-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elevation along the road, ${lo}–${hi} m">
+      <path class="pf-area" d="${line} L${W} ${H} L0 ${H} Z"/>
+      <path class="pf-line" d="${line}"/>
+      <text class="nc-grid-lbl" x="${W}" y="${top + 2}" text-anchor="end">${hi} m</text>
+      <text class="nc-grid-lbl" x="${W}" y="${H - 1}" text-anchor="end">${lo} m</text>
+      ${marks}
+    </svg>`;
+}
+
+// Full weather panel: current conditions, the night chart, where along the road
+// it's worst, and four night-scoped tiles. Every number is the worst of the
+// road's forecast points (start / summit / end / low point), and says which
+// point it came from whenever there is more than one.
+function weatherHtml(cond, profile) {
   const now = appState.now();
-  const H = fc.hourly;
-  const ni = H.time.findIndex(t => new Date(t) > now);
-  if (ni < 0) return { html: '<div style="font-size:11px;color:var(--text3)">No forecast.</div>', chart: null };
-  const temp = H.temperature_2m[ni], wcode = H.weathercode?.[ni];
-  const groups = nightGroups(nightHours(fc, now));
+  const multi = cond.points.length > 1;
+  const at = (label) => (multi && label ? ` · ${label.toLowerCase()}` : '');
+  const { coldest } = currentReadings(cond, now);
+  const groups = nightGroups(cond.hours);
   const chart = buildNightChart(groups);
-  // The chart draws the whole night; the tiles are scoped to the hours actually
+  // The chart draws the whole night; the numbers are scoped to the hours actually
   // driven. A worst-hour figure taken from 05:00 is true and useless.
   const decide = groups.length ? decisionHours(groups[0].hours) : [];
   const ext = nightExtremes(decide);
   const scope = decide.length
     ? `Worst of ${hh(decide[0].hour)}:00–${hh(decide[decide.length - 1].hour)}:00`
     : '';
-  const tile = (k, v, at, cls) =>
-    `<div class="w-detail"><div class="wlbl">${k}</div><div class="wval ${cls || ''}">${v}${at ? `<span class="wat"> at ${at}</span>` : ''}</div></div>`;
+
+  // Each point on its own, over the same hours.
+  const pointStats = cond.points.map(p => {
+    const hrs = decisionHours(firstNight(p.hours));
+    return {
+      label: p.label, km: p.km, ele: typeof p.ele === 'number' ? Math.round(p.ele) : null,
+      fog: hrs.length ? Math.max(...hrs.map(h => h.risk)) : null,
+      temp: hrs.length ? Math.min(...hrs.map(h => h.temp)) : null
+    };
+  });
+  const rows = multi ? `<div class="where-rows">${pointStats.map(p => `
+      <div class="where-row">
+        <i class="where-dot" style="background:${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}"></i>
+        <span class="where-name">${escapeHtml(p.label)}</span>
+        <span class="where-ele">${p.ele != null ? `${p.ele} m` : ''}</span>
+        <span class="where-val">${p.fog != null ? `fog ${p.fog}%` : '—'}${p.temp != null ? ` · <span class="${p.temp <= 3 ? 'w-ice' : ''}">${Math.round(p.temp)}°C</span>` : ''}</span>
+      </div>`).join('')}</div>` : '';
+  const where = profileSvg(profile, pointStats) + rows;
+
+  const tile = (k, v, when, cls) =>
+    `<div class="w-detail"><div class="wlbl">${k}</div><div class="wval ${cls || ''}">${v}${when ? `<span class="wat"> at ${when}</span>` : ''}</div></div>`;
   const tiles = ext ? [
-    tile('Coldest', `${Math.round(ext.coldest.temp)}°C`, `${hh(ext.coldest.hour)}h`, ext.coldest.temp <= 3 ? 'w-ice' : ''),
-    tile('Fog peak', `${ext.foggiest.risk}%`, `${hh(ext.foggiest.hour)}h`, 'w-fog'),
+    tile('Coldest', `${Math.round(ext.coldest.temp)}°C`, `${hh(ext.coldest.hour)}h${at(ext.coldest.tempAt)}`, ext.coldest.temp <= 3 ? 'w-ice' : ''),
+    tile('Fog peak', `${ext.foggiest.risk}%`, `${hh(ext.foggiest.hour)}h${at(ext.foggiest.riskAt)}`, 'w-fog'),
     tile('Calmest wind', `${Math.round(ext.calmest.wind)} km/h`, `${hh(ext.calmest.hour)}h`),
     tile('Rain peak', `${Math.round(ext.wettest.precip)}%`, ext.wettest.precip > 0 ? `${hh(ext.wettest.hour)}h` : '')
   ].join('') : '';
+
   const html = `
-    <div class="weather-now">
-      <div class="weather-main"><div class="temp-big">${Math.round(temp)}°C</div><div class="weather-desc">${wmoDesc(wcode)}</div></div>
-    </div>
+    ${coldest ? `<div class="weather-now">
+      <div class="weather-main"><div class="temp-big">${Math.round(coldest.temp)}°C</div>
+        <div class="weather-desc">${wmoDesc(coldest.code)}${multi ? ` · coldest point: ${escapeHtml(coldest.label.toLowerCase())}` : ''}</div></div>
+    </div>` : ''}
     <div class="hourly-title" data-resting="Fog above · temperature below">Fog above · temperature below</div>
     ${chart
       ? `<div class="night-chart-wrap">${nightChartHtml(chart)}<div class="nc-axis">${axisHtml(chart.segments, chart.hourW)}</div></div>`
       : '<div style="font-size:11px;color:var(--text3);padding:4px 0 8px">No night hours in window</div>'}
     ${scope ? `<div class="hourly-title tiles-scope">${scope}</div>` : ''}
+    ${where ? `<div class="where">${where}</div>` : ''}
     <div class="weather-details">${tiles}</div>`;
-  return { html, chart };
+  return { html, chart, multi };
 }
 
 // Scrubbing: a vertical line that follows the cursor, snapped to the nearest
@@ -467,7 +556,8 @@ function weatherHtml(fc) {
 // The readout replaces the chart's own heading rather than floating near the
 // cursor — a tooltip would cover the curve it describes, and on a phone your
 // finger is already sitting on top of it.
-function wireScrub(root, chart) {
+function wireScrub(root, chart, multi = false) {
+  const at = (label) => (multi && label ? ` ${label.toLowerCase()}` : '');
   const svg = root.querySelector('.night-chart');
   const head = root.querySelector('.hourly-title');
   const group = root.querySelector('.nc-scrub');
@@ -493,7 +583,7 @@ function wireScrub(root, chart) {
     tmpDot.setAttribute('cx', p.x); tmpDot.setAttribute('cy', p.tmpY);
     group.classList.add('on');
     const night = p.night ? nightLabel(chart.segments[p.night].key, p.night).replace(' night', '') + ' ' : '';
-    head.textContent = `${night}${hh(p.hour)}:00 · fog ${p.risk}% · ${Math.round(p.temp)}°C`;
+    head.textContent = `${night}${hh(p.hour)}:00 · fog ${p.risk}%${at(p.riskAt)} · ${Math.round(p.temp)}°C${at(p.tempAt)}`;
     head.classList.add('nc-readout');
   };
   const clear = () => {
@@ -516,15 +606,16 @@ function wireScrub(root, chart) {
 async function fillInspectorWeather(road) {
   const el = document.getElementById('inspector-weather');
   if (!el) return;
-  const mid = midpoint(road);
-  if (!mid) { el.textContent = 'No location data.'; return; }
+  if (!road.points?.length) { el.textContent = 'No location data.'; return; }
   try {
-    const fc = await appState.weatherClient.get(mid.lat, mid.lon);
-    const { html, chart } = weatherHtml(fc);
+    const cond = await conditionsFor(road);
+    if (!el.isConnected) return; // another road was opened meanwhile
+    if (!cond) { el.textContent = 'Forecast unavailable.'; return; }
+    const { html, chart, multi } = weatherHtml(cond, roadProfile(road));
     el.className = '';
     el.innerHTML = html;
-    if (chart) wireScrub(el, chart);
-  } catch { el.textContent = 'Forecast unavailable.'; }
+    if (chart) wireScrub(el, chart, multi);
+  } catch { if (el.isConnected) el.textContent = 'Forecast unavailable.'; }
 }
 
 // After an edit, re-open the road from the saved data: the inspector was built
@@ -891,6 +982,7 @@ async function loadAndRender() {
   updateDraftUi();
   applyPlannerHint();
   switchView('library');
+  backfillTerrain(); // background; only runs where saving is possible
   return true;
 }
 

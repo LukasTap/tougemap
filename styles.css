@@ -336,3 +336,15 @@ path.leaflet-interactive:focus{outline:none !important}
      viewport no longer blocks zoom (pinch-zoom is back for readability) */
   input, select, textarea, .search-input, #road-name-input, .tonight-within input[type=number] { font-size: 16px; }
 }
+/* ── where along the road: elevation strip + one row per forecast point ── */
+.where{margin:2px 0 12px}
+.profile-chart{display:block;width:100%;height:auto;overflow:visible;margin-bottom:6px}
+.pf-area{fill:var(--text2);opacity:.07}
+.pf-line{fill:none;stroke:var(--text3);stroke-width:1.5;stroke-linejoin:round}
+.pf-mark{stroke:var(--surface);stroke-width:1.5}
+.where-rows{display:flex;flex-direction:column;gap:3px}
+.where-row{display:grid;grid-template-columns:8px 1fr auto auto;align-items:center;gap:8px;font-size:11px;color:var(--text2)}
+.where-dot{width:8px;height:8px;border-radius:50%}
+.where-ele,.where-val{font-family:'Space Mono',monospace;font-size:10px;color:var(--text3)}
+.where-val{color:var(--text2);text-align:right}
+.w-ice{color:#a8dcf0}

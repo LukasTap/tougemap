@@ -36,7 +36,10 @@ export function normalizeRoad(r, fallbackId = Date.now()) {
     km: typeof r.km === 'number' ? r.km : Math.round(polylineKm(points) * 10) / 10,
     created: r.created ?? r.saved ?? new Date().toISOString().slice(0, 10),
     driveTimeFromHome: r.driveTimeFromHome ?? null,
-    meta: migrateMeta({ ...META_DEFAULT, ...(r.meta ?? {}) })
+    meta: migrateMeta({ ...META_DEFAULT, ...(r.meta ?? {}) }),
+    // Elevation profile (terrain.js) — kept only when present, so roads saved
+    // before it existed round-trip unchanged.
+    ...(r.terrain?.ele ? { terrain: { ele: r.terrain.ele.slice() } } : {})
   };
 }
 

@@ -46,3 +46,10 @@ test('roads without ids get distinct ones (no Date.now() collisions in one load)
   const out = migrate([{ name: 'a', points: [] }, { name: 'b', points: [] }, { name: 'c', points: [] }]);
   assert.equal(new Set(out.roads.map(r => r.id)).size, 3);
 });
+
+test('an elevation profile survives migrate (and roads without one gain no field)', () => {
+  const withT = migrate({ version: 2, home: null, roads: [{ id: 1, name: 'a', points: [], terrain: { ele: [300, 900, 400] } }] });
+  assert.deepEqual(withT.roads[0].terrain, { ele: [300, 900, 400] });
+  const without = migrate({ version: 2, home: null, roads: [{ id: 2, name: 'b', points: [] }] });
+  assert.ok(!('terrain' in without.roads[0]));
+});

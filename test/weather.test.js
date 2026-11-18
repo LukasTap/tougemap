@@ -1,9 +1,12 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
-  createWeatherClient, nightKeyOf, nightHours, firstNightHours, decisionHours,
-  nightExtremes, tonightRisks, buildNightChart, nightGroups, inDriveWindow
+  createWeatherClient, nightKeyOf, nightHours, firstNight, decisionHours,
+  nightExtremes, tonightRisks, buildNightChart, nightGroups, inDriveWindow,
+  mergeNightHours, roadConditions, currentReadings
 } from '../js/weather.js';
+
+const firstNightHours = (fc, now) => firstNight(nightHours(fc, now));
 
 // Build a 48h forecast with per-hour conditions chosen by `at(t)`.
 // Local-time stamps (no Z) so hour-of-day is unambiguous.
@@ -51,8 +54,8 @@ test('decision numbers use the driving window, the strip uses the whole night', 
   const fc = buildForecast((t) => (t.getDate() === 17 && t.getHours() === 5) ? SOUPY : MILD);
   const now = new Date('2026-09-16T14:00:00');
   assert.equal(worst(decisionHours(firstNightHours(fc, now))), 10);
-  assert.equal(Math.max(...tonightRisks(fc, now)), 100);
-  assert.equal(tonightRisks(fc, now).length, 11); // 20:00 → 06:00
+  assert.equal(Math.max(...tonightRisks(nightHours(fc, now))), 100);
+  assert.equal(tonightRisks(nightHours(fc, now)).length, 11); // 20:00 → 06:00
 });
 
 test('after the window has passed, decisions fall back to what is left of the night', () => {
@@ -85,23 +88,71 @@ test('night chart: one temperature scale, freezing line shown when 0°C is in ra
   assert.ok(chart.temp.lo < 0 && chart.temp.hi > 0);
 });
 
-test('weather client caches within TTL and dedups grid cells', async () => {
-  let calls = 0;
-  const fetchFn = async () => { calls++; return { ok: true, json: async () => buildForecast(() => MILD) }; };
-  const client = createWeatherClient({ fetchFn, now: () => new Date('2026-07-16T18:30:00'), ttlMs: 60000 });
-  await client.get(48.71, 19.11);
-  await client.get(48.73, 19.14); // same ~10km cell → no new call
-  assert.equal(calls, 1);
-  await client.get(49.5, 21.0);   // far → new call
-  assert.equal(calls, 2);
+// A fake Open-Meteo: one object for one location, an array for several —
+// like the real API.
+function fakeMeteo() {
+  const urls = [];
+  const fetchFn = async (url) => {
+    urls.push(url);
+    const n = new URL(url).searchParams.get('latitude').split(',').length;
+    const one = () => ({ ...buildForecast(() => MILD), elevation: 500 });
+    return { ok: true, json: async () => (n === 1 ? one() : Array.from({ length: n }, one)) };
+  };
+  return { fetchFn, urls };
+}
+
+test('weather client: points requested together go out as ONE multi-location call', async () => {
+  const { fetchFn, urls } = fakeMeteo();
+  const client = createWeatherClient({ fetchFn, batchWindowMs: 5 });
+  const [a, b, c] = await Promise.all([client.get(48.71, 19.11), client.get(48.95, 19.6), client.get(49.5, 21.0)]);
+  assert.equal(urls.length, 1);
+  assert.equal(new URL(urls[0]).searchParams.get('latitude'), '48.7100,48.9500,49.5000');
+  assert.ok(a.hourly && b.hourly && c.hourly);
+});
+
+test('weather client: ~1 km cells — a road\'s valley and summit are separate, a repeat is cached', async () => {
+  const { fetchFn, urls } = fakeMeteo();
+  const client = createWeatherClient({ fetchFn, batchWindowMs: 1, ttlMs: 60000 });
+  await client.get(48.711, 19.111);
+  await client.get(48.712, 19.113); // same ~1 km cell → cached
+  assert.equal(urls.length, 1);
+  await client.get(48.73, 19.14);   // 2–3 km away → its own forecast
+  assert.equal(urls.length, 2);
 });
 
 test('weather client does not cache failures', async () => {
   let calls = 0;
   const fetchFn = async () => { calls++; return { ok: false, status: 503 }; };
-  const client = createWeatherClient({ fetchFn, ttlMs: 60000 });
+  const client = createWeatherClient({ fetchFn, ttlMs: 60000, batchWindowMs: 1 });
   await assert.rejects(client.get(48.7, 19.1));
   await new Promise(r => setTimeout(r, 0));
   await assert.rejects(client.get(48.7, 19.1));
   assert.equal(calls, 2);
+});
+
+test('mergeNightHours: worst of every point, hour by hour, and where it came from', () => {
+  const now = new Date('2026-09-16T14:00:00');
+  const valley = { label: 'Start', hours: nightHours(buildForecast(t => (t.getHours() === 23 ? SOUPY : MILD)), now) };
+  const summit = { label: 'Summit', hours: nightHours(buildForecast(t => ({ ...MILD, temp: t.getHours() === 1 ? -3 : 4 })), now) };
+  const merged = mergeNightHours([valley, summit]);
+  const h23 = merged.find(h => h.hour === 23), h01 = merged.find(h => h.hour === 1);
+  assert.equal(h23.risk, 100); assert.equal(h23.riskAt, 'Start');
+  assert.equal(h01.temp, -3);  assert.equal(h01.tempAt, 'Summit');
+  assert.equal(merged.length, valley.hours.length);
+});
+
+test('roadConditions skips points whose forecast failed, and falls back to the forecast\'s elevation', () => {
+  const now = new Date('2026-09-16T14:00:00');
+  const fc = { ...buildForecast(() => MILD), elevation: 812 };
+  const c = roadConditions([{ label: 'Start' }, { label: 'Summit', ele: 1200 }], [fc, null], now);
+  assert.equal(c.points.length, 1);
+  assert.equal(c.points[0].ele, 812);
+  assert.equal(roadConditions([{ label: 'Start' }], [null], now), null);
+});
+
+test('currentReadings picks the coldest point right now', () => {
+  const now = new Date('2026-09-16T14:30:00');
+  const warm = buildForecast(() => ({ ...MILD, temp: 9 })), cold = buildForecast(() => ({ ...MILD, temp: 2 }));
+  const c = roadConditions([{ label: 'Start' }, { label: 'Summit' }], [warm, cold], now);
+  assert.equal(currentReadings(c, now).coldest.label, 'Summit');
 });

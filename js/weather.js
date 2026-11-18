@@ -52,17 +52,66 @@ export function nightGroups(hours) {
   return groups;
 }
 
-// Whatever is left of the first upcoming night.
-export function firstNightHours(d, now) {
-  const first = nightGroups(nightHours(d, now))[0];
+// Whatever is left of the first upcoming night, from a list of night hours.
+export function firstNight(hours) {
+  const first = nightGroups(hours)[0];
   return first ? first.hours : [];
 }
 
 // Per-hour risks for the first upcoming night — what the card strip draws.
 // Deliberately the WHOLE night, not just the driving window: the strip's job is
 // to show the shape, including the stretch you would be avoiding.
-export function tonightRisks(d, now) {
-  return firstNightHours(d, now).map(h => h.risk);
+export function tonightRisks(hours) {
+  return firstNight(hours).map(h => h.risk);
+}
+
+// ── SEVERAL POINTS PER ROAD ─────────────────────────────────────────────────
+// One road, several forecast points (terrain.js): combined hour by hour into the
+// worst case — most fog, lowest temperature, calmest wind, highest rain chance —
+// remembering WHERE the fog and the cold came from, so the inspector can say
+// "fog 80% at the summit". Only hours every point has are kept.
+export function mergeNightHours(perPoint) {
+  if (!perPoint.length) return [];
+  const byTime = new Map();
+  for (const p of perPoint) {
+    for (const h of p.hours) {
+      const k = h.t.getTime();
+      const cur = byTime.get(k);
+      if (!cur) { byTime.set(k, { ...h, riskAt: p.label, tempAt: p.label, n: 1 }); continue; }
+      cur.n++;
+      if (h.risk > cur.risk) { cur.risk = h.risk; cur.riskAt = p.label; }
+      if (h.temp < cur.temp) { cur.temp = h.temp; cur.tempAt = p.label; }
+      cur.wind = Math.min(cur.wind, h.wind);
+      cur.precip = Math.max(cur.precip, h.precip);
+    }
+  }
+  return [...byTime.values()]
+    .filter(h => h.n === perPoint.length)
+    .sort((a, b) => a.t - b.t)
+    .map(({ n, ...h }) => h);
+}
+
+// points: [{ label, ele?, ... }] with forecasts in the same order (null = failed).
+// → { points: [{ ...point, forecast, hours }], hours: merged } or null if no
+// point has a forecast. A point's elevation falls back to the one the forecast
+// was computed for.
+export function roadConditions(points, forecasts, now) {
+  const per = points
+    .map((p, i) => ({ ...p, ele: p.ele ?? forecasts[i]?.elevation, forecast: forecasts[i] }))
+    .filter(p => p.forecast)
+    .map(p => ({ ...p, hours: nightHours(p.forecast, now) }));
+  return per.length ? { points: per, hours: mergeNightHours(per) } : null;
+}
+
+// The coming hour at each point, and the coldest of them.
+export function currentReadings(conditions, now) {
+  const all = conditions.points.map(p => {
+    const H = p.forecast.hourly;
+    const i = H.time.findIndex(t => new Date(t) > now);
+    return i < 0 ? null : { label: p.label, temp: H.temperature_2m[i], code: H.weathercode?.[i] };
+  }).filter(Boolean);
+  const coldest = all.reduce((c, r) => (!c || r.temp < c.temp ? r : c), null);
+  return { all, coldest };
 }
 
 // The hours a decision actually rests on: the driving window if any of it is
@@ -264,7 +313,7 @@ export function buildNightChart(groups, geom = CHART) {
       // against real data instead of the view re-deriving the geometry.
       points: g.hours.map((h, i) => ({
         x: xs[i], night: gi, hour: h.hour,
-        risk: h.risk, temp: h.temp,
+        risk: h.risk, temp: h.temp, riskAt: h.riskAt, tempAt: h.tempAt,
         fogY: r1(yFog(h.risk)), tmpY: r1(yTmp(h.temp))
       })),
       x0: xs[0], x1: xs[xs.length - 1],
@@ -314,20 +363,52 @@ export function buildNightChart(groups, geom = CHART) {
 
 const HOURLY = 'temperature_2m,relative_humidity_2m,dew_point_2m,precipitation_probability,weathercode,windspeed_10m';
 
-export function createWeatherClient({ fetchFn = (u, o) => fetchWithTimeout(u, o, 12000), now = () => new Date(), ttlMs = 30 * 60 * 1000 } = {}) {
+// Forecasts per POINT (~1 km cells — the old 10 km grid would have merged a
+// road's valley and summit into one forecast). Requests made close together are
+// sent as one multi-location call, so a whole library costs one or two requests
+// rather than one per point. Open-Meteo downscales each location to its own
+// elevation, which is what makes the summit reading worth having.
+export function createWeatherClient({
+  fetchFn = (u, o) => fetchWithTimeout(u, o, 15000), now = () => new Date(),
+  ttlMs = 30 * 60 * 1000, batchSize = 50, batchWindowMs = 25
+} = {}) {
   const cache = new Map();   // cellKey -> {ts, promise}
-  return {
-    async get(lat, lon) {
-      const key = gridCellKey(lat, lon);
-      const hit = cache.get(key);
-      if (hit && (now().getTime() - hit.ts) < ttlMs) return hit.promise;
+  let queue = [];
+  let timer = null;
+
+  function flush() {
+    timer = null;
+    const batch = queue;
+    queue = [];
+    for (let i = 0; i < batch.length; i += batchSize) {
+      const chunk = batch.slice(i, i + batchSize);
+      const q = (key) => chunk.map(c => c[key].toFixed(4)).join(',');
       // forecast_days=3, not 2: the window starts at 00:00 TODAY, so 2 days ends
       // at 23:00 tomorrow and cuts tomorrow night (20:00→06:00) off after 4
       // hours. 3 days covers both nights in full.
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${lat}&longitude=${lon}&hourly=${HOURLY}&forecast_days=3&timezone=auto`;
-      const promise = fetchFn(url).then(r => { if (!r.ok) throw new Error('wx ' + r.status); return r.json(); });
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${q('lat')}&longitude=${q('lon')}&hourly=${HOURLY}&forecast_days=3&timezone=auto`;
+      fetchFn(url)
+        .then(r => { if (!r.ok) throw new Error('wx ' + r.status); return r.json(); })
+        .then(json => {
+          const list = Array.isArray(json) ? json : [json]; // one location → plain object
+          if (list.length !== chunk.length) throw new Error('wx: unexpected response');
+          chunk.forEach((c, k) => c.resolve(list[k]));
+        })
+        .catch(err => chunk.forEach(c => c.reject(err)));
+    }
+  }
+
+  return {
+    get(lat, lon) {
+      const key = gridCellKey(lat, lon, 0.01);
+      const hit = cache.get(key);
+      if (hit && (now().getTime() - hit.ts) < ttlMs) return hit.promise;
+      let resolve, reject;
+      const promise = new Promise((res, rej) => { resolve = res; reject = rej; });
       cache.set(key, { ts: now().getTime(), promise });
-      promise.catch(() => cache.delete(key)); // don't cache failures
+      promise.catch(() => { if (cache.get(key)?.promise === promise) cache.delete(key); }); // don't cache failures
+      queue.push({ lat, lon, resolve, reject });
+      if (!timer) timer = setTimeout(flush, batchWindowMs);
       return promise;
     },
     clear() { cache.clear(); }

@@ -1,16 +1,13 @@
 // js/tonight-rank.js — pure ranking of the library by night conditions
-import { firstNightHours, decisionHours } from './weather.js';
+import { firstNight, decisionHours } from './weather.js';
 
 // Ranks on the hours actually driven (22:00–02:00, or what is left of the night
-// once that is past) rather than on the whole night.
-//
-// Every component is now the worst case across those hours. Fog used to come
-// from the whole night while rain and temperature came from a single arbitrary
-// hour — the next one after `now`, which in the afternoon is an hour you will
-// never drive in — so the three parts of one score described three different
-// stretches of time.
-export function scoreRoad(road, forecast, now) {
-  const hours = decisionHours(firstNightHours(forecast, now));
+// once that is past), every component the worst case across those hours — and,
+// since a road now has several forecast points (terrain.js), across the whole
+// road: `conditions.hours` is already the worst of start / summit / end / low
+// point for each hour (weather.js mergeNightHours).
+export function scoreRoad(conditions) {
+  const hours = decisionHours(firstNight(conditions?.hours || []));
   if (!hours.length) return { fog: 0, rainPct: 0, temp: null, score: Infinity };
   const fog = Math.max(...hours.map(h => h.risk));
   const rainPct = Math.max(...hours.map(h => h.precip));
@@ -19,9 +16,10 @@ export function scoreRoad(road, forecast, now) {
   return { fog, rainPct, temp, score: fog * 1.0 + rainPct * 0.6 + tempPenalty };
 }
 
-export function rankRoads(entries, now) {
+// entries: [{ road, conditions }] — conditions null when no forecast could be had.
+export function rankRoads(entries) {
   return entries
-    .map(e => ({ road: e.road, s: e.forecast ? scoreRoad(e.road, e.forecast, now).score : Infinity }))
+    .map(e => ({ road: e.road, s: e.conditions ? scoreRoad(e.conditions).score : Infinity }))
     .sort((a, b) => a.s - b.s)
     .map(x => x.road);
 }
