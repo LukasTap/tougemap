@@ -1,112 +1,120 @@
 # TougeMap
 
 A personal, cross-device map of driving ("touge") roads. Save your favourite
-roads, see their length, drive-time from home, and tonight's weather/fog, and
-rank the whole library by how good a drive it'll be *tonight*. Curvature
-discovery (finding new twisty roads from OpenStreetMap) is a secondary tool.
+roads, see their length, distance from home, and tonight's fog / temperature /
+rain, and rank the whole library by how good a drive it'll be *tonight*.
+Curvature discovery (finding new twisty roads from OpenStreetMap) is a secondary
+tool.
 
-- **You** (the owner) create/edit roads on the **PC**, and the app commits them
-  to a JSON file in **your** GitHub repo.
-- **Any device** — your phone, a friend's browser — reads that public file and
-  views the roads, weather, and "roads near me". No account needed to view.
-- No build step, no server, no framework. Plain static files + Leaflet.
+- No build step, no server, no framework. Plain static files + Leaflet, hosted on
+  GitHub Pages.
+- Your roads live in **`roads.json` in this repo, encrypted** with a passphrase
+  (AES-256-GCM, key from PBKDF2). The repo is public, so without the passphrase
+  the file is just ciphertext — nobody can clone it or open the site and see your
+  roads or your home point.
+- **Viewing** needs only the passphrase. **Editing** (draw / save / rename /
+  delete / set home) also needs a GitHub token, and only works on a desktop-size
+  screen.
 
 ## How it works
 
-- The app is static files served over HTTPS (GitHub Pages).
-- Your saved roads live in **`roads.json` in this same repo**.
-- **Reading** roads needs no auth — it's a public file.
-- **Writing** (save/edit/delete a road, set home) is done only from the PC,
-  authenticated with a GitHub **personal access token** you paste into the app's
-  onboarding screen. The token is stored in that browser's `localStorage` only —
-  it is never committed, logged, or put in a URL.
-- Roads are cached in the browser (IndexedDB) so the app works **offline** in the
-  field; it refreshes when it has signal. Weather is **never** cached to disk —
-  it's fetched fresh (with a short in-session de-dupe) so it's never stale.
+- Opening the app on a new device asks for the passphrase once; it's remembered
+  in that browser's `localStorage`. **🔑 → Forget this device** removes the
+  passphrase, the token and the offline copy from that browser.
+- Roads are kept in IndexedDB too (decrypted), so the app works **offline** in the
+  field. When it's showing that offline copy, a banner says so and saving is off.
+- Weather is **never** stored — always fetched fresh (with a 30-minute in-session
+  de-dupe).
+- **Saving is safe against stale copies.** The app remembers exactly which version
+  of `roads.json` it loaded (its git sha) and every save replaces only that
+  version. If the file changed elsewhere in the meantime, GitHub refuses the save
+  and the app tells you to reload — it never silently overwrites. A save that
+  fails changes nothing in the app either.
+- If the roads can't be loaded at all, the app says so and stays read-only instead
+  of showing an empty library you could accidentally save over.
+- Before each save the app gzips and encrypts the library, then decrypts it again
+  to check, and only then uploads it. Every save is a commit, so any version can
+  be recovered from the repo history.
 
-## One-time setup
+## Setup
 
-### 1. Create the repo
-Create a **public** repo on **your personal** GitHub account (e.g. `tougemap`),
-and put these files in it. Commit a starter `roads.json`:
-```json
-{ "version": 2, "home": null, "roads": [] }
-```
+### 1. Repo + Pages
+Public repo on your personal account, with these files. Settings → Pages →
+Deploy from a branch → `main` / `/ (root)`. The app is then at
+`https://<username>.github.io/<repo>/`. Set `owner` in `js/config.js` to your
+username (and repo/branch/path if you changed them).
 
-### 2. Enable GitHub Pages
-Repo **Settings → Pages → Build and deployment → Deploy from a branch**, pick
-`main` / `/ (root)`. Your app (and the read-only share link for friends) is then:
-```
-https://<your-username>.github.io/<repo>/
-```
+A brand-new repo needs no `roads.json`: the first save creates it.
 
-### 3. Create a write token (PC only)
-On GitHub: **Settings → Developer settings → Fine-grained tokens → Generate new
-token**. Scope it to **only this one repo**, with **Repository permissions →
-Contents: Read and write**. Copy the token.
+### 2. Write token (only on the PC you edit from)
+GitHub → Settings → Developer settings → **Fine-grained tokens** → Generate.
+Only this repo; Repository permissions → **Contents: Read and write**.
 
-### 4. Connect the app
-Open the app. On first run it asks for **owner / repo / branch / path**
-(`main` / `roads.json` are the defaults). On the **PC**, also paste your token
-so you can save/edit. On the **phone**, leave the token blank — it only needs to
-read. Done.
+### 3. Connect the app
+Open the app → **🔑** → paste the token, and set a passphrase (typed twice). Setting
+or changing the passphrase re-encrypts and saves the library straight away; the
+new passphrase only takes effect on that device once the save succeeded. Other
+devices then need the new passphrase.
 
-## Sharing (read-only)
-Because the repo is public, anyone you give the Pages URL to just opens it and
-sees your roads, on any device, with zero setup. They can view everything; only
-you (with the token, on your PC) can change anything.
-
-## Migrating roads from the old single-file version
-The old `tougemap.html` stored roads in that browser's `localStorage`. There is
-no in-app import UI — to bring your roads over: open the old app, use its
-**Export** to download the JSON, then commit that file as `roads.json` in this
-repo (or hand it off to be committed for you). The app's `migrate()` reads the
-old v1 format automatically the next time it loads the file, so no manual
-conversion is needed.
+On the phone (or a friend's browser), just enter the passphrase when asked.
 
 ## Local development
-No toolchain required. Serve the folder over HTTP (not `file://`) and open it:
+
+No toolchain required. Serve the folder over HTTP (not `file://`):
 ```bash
-python -m http.server 5178        # then open http://127.0.0.1:5178/
-# or:  npx serve -l 5178 .
+python -m http.server 5178        # then open http://localhost:5178/
 ```
 
-Run the unit tests (Node 18+; zero dependencies):
+**Sample data:** `http://localhost:5178/?fixture` loads the made-up roads in
+`dev/fixture-roads.json` instead of the real library, with saving switched off.
+Handy for working on the UI without the passphrase. Only works on localhost.
+
+**Tests** (Node 20+, zero dependencies):
 ```bash
-npm test        # runs node --test over test/*.test.js
+npm test          # node --test → test/*.test.js
 ```
 
-## Deploying updates
-Just push your changed files to the repo — GitHub Pages redeploys automatically.
-The service worker is **network-first for the app shell**, so an online device
-picks up the new version on its next load; offline devices keep working from the
-last cached copy. (No cache-version bump needed.)
+## Deploying
+Push to `main`; GitHub Pages redeploys in a minute or so. The service worker is
+network-first for the app's own files and revalidates past Pages' 10-minute
+cache, so an online device picks up a deploy on its next load; offline devices
+keep working from the last cached copy. If you add a file under `js/`, add it to
+`SHELL` in `sw.js` (a test checks this) and bump `CACHE`.
 
 ## Layout
 ```
 index.html          app shell / layout
 styles.css          dark tactical theme
-manifest.json,sw.js PWA install + offline (shell + roads.json only; never weather)
-roads.json          your saved-road library (the data)
+manifest.json       PWA install metadata
+sw.js               offline app shell (own files + pinned Leaflet only)
+roads.json          your saved-road library (encrypted)
+dev/                sample data for local development (?fixture)
+docs/               v2 design spec + implementation plan
 js/
-  app.js            bootstrap, views (Library / Tonight / Discover|Near me)
-  ui.js             view switching, bottom sheet, modal, onboarding
+  app.js            bootstrap, views (Library / Tonight / Discover | Near me), inspector
+  ui.js             view switching, bottom sheet, modal, unlock/settings, status banner
   map.js            Leaflet map, layers, GPS locate
-  library.js        road cards, shape thumbnails, sort/filter
-  planner.js        PC-only: draw/route/save/edit, home, drive-time
-  tonight-rank.js   rank the library by night conditions
-  weather.js        open-meteo fetch + fog scoring (in-session cache only)
-  curvature.js      adamfranco/curvature port + Overpass loader (discovery)
-  routing.js        OSRM helpers + air-distance fallback
-  sync.js           GitHub read (public) / write (token)
+  library.js        road cards, shape thumbnails, sort/filter, escaping
+  planner.js        PC-only: draw / route / save / edit, home, drive distance
+  repo.js           the loaded library + the only way to change it (copy → write → adopt)
+  sync.js           GitHub read / write, sha pinning, local auth
+  crypto.js         passphrase encryption (AES-GCM + PBKDF2, gzip)
   store.js          v2 schema, v1→v2 migration, IndexedDB cache
+  tonight-rank.js   rank the library by night conditions
+  weather.js        open-meteo fetch, fog scoring, night chart geometry
+  curvature.js      adamfranco/curvature port + Overpass loader (Discover)
+  routing.js        OSRM helpers + air-distance fallback
   geo.js            geometry helpers
-test/               node --test unit tests for the pure modules
+  http.js           fetch with timeout
+  config.js         repo coordinates, dev fixture switch
+test/               node --test unit tests
 ```
+The design mock-ups that used to live in `design/` are on the `design-archive`
+branch.
 
-## External services (all free, no keys except your GitHub token)
+## External services (all free; no keys except your GitHub token)
 - **GitHub** — hosting (Pages) + data store (Contents API / raw read)
 - **open-meteo** — weather & fog inputs
-- **OSRM** (public demo) — route drawing & drive-time; falls back to air distance
-- **Overpass** — curvature discovery (secondary)
-- **Nominatim** — best-effort auto-naming of discovered roads
+- **OSRM** (public demo) — route drawing & distance from home; falls back to air distance
+- **Overpass** — curvature discovery
+- Map tiles: OpenStreetMap, OpenTopoMap, Esri World Imagery
