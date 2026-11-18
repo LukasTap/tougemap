@@ -1,6 +1,0 @@
-{
-  "artboards": [
-    { "file": "Main.dc.html", "x": 0, "y": 0, "w": 620, "h": 680, "title": "TougeMap · App Icon" }
-  ],
-  "launch": { "view": "canvas" }
-}
