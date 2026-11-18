@@ -30,6 +30,11 @@ tool.
   version. If the file changed elsewhere in the meantime, GitHub refuses the save
   and the app tells you to reload — it never silently overwrites. A save that
   fails changes nothing in the app either.
+- **Other devices see a save within about a minute.** Everything reads
+  `roads.json` through the GitHub API (the PC with its token, everyone else
+  anonymously — 60 requests per hour per network, one per app load). If that
+  allowance runs out, the app reads the public file instead, which GitHub's CDN
+  can serve up to 5 minutes old.
 - If the roads can't be loaded at all, the app says so and stays read-only instead
   of showing an empty library you could accidentally save over.
 - Before each save the app gzips and encrypts the library, then decrypts it again

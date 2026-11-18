@@ -527,6 +527,14 @@ async function fillInspectorWeather(road) {
   } catch { el.textContent = 'Forecast unavailable.'; }
 }
 
+// After an edit, re-open the road from the saved data: the inspector was built
+// from the old copy, so its name and chips would otherwise stay stale until you
+// navigated away and back.
+function refreshAfterEdit(id) {
+  refreshCurrentView();
+  selectRoad(id);
+}
+
 function wireInspectorEdit(road) {
   document.getElementById('insp-edit-toggle')?.addEventListener('click', () => {
     const f = document.getElementById('insp-edit-form');
@@ -537,7 +545,7 @@ function wireInspectorEdit(road) {
       title: 'Rename road', value: road.name,
       onSave: (name) => {
         if (writeBlockedAlert()) return;
-        renameRoad(road.id, name, appState).then(refreshCurrentView).catch(failAlert('Rename failed'));
+        renameRoad(road.id, name, appState).then(() => refreshAfterEdit(road.id)).catch(failAlert('Rename failed'));
       }
     });
   });
@@ -557,7 +565,7 @@ function wireInspectorEdit(road) {
       notes: document.getElementById('insp-notes').value
     };
     if (btn) { btn.disabled = true; btn.textContent = 'SAVING…'; }
-    editMeta(road.id, patch, appState).then(refreshCurrentView).catch(failAlert('Save failed'))
+    editMeta(road.id, patch, appState).then(() => refreshAfterEdit(road.id)).catch(failAlert('Save failed'))
       .finally(() => { if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'SAVE META'; } });
   });
 }

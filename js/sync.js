@@ -67,23 +67,22 @@ async function getBytes(fetchFn, url, opts) {
   return new Uint8Array(await res.arrayBuffer());
 }
 
-// The file's exact bytes. With a token, through the API, which is never served
-// from a CDN — so a reload right after a save sees that save. Without one (or if
-// the API refuses the token), from the public raw URL, which GitHub's CDN can
-// serve up to 5 minutes stale: fine for viewing, and still safe for writing
-// because the write is pinned to the sha of what was actually read.
+// The file's exact bytes, through the GitHub API first:
+//   with a token   — always fresh, so a reload right after a save shows it;
+//   without one    — at most ~60 s behind (the API's own cache), within GitHub's
+//                    60-requests-per-hour allowance for anonymous use per IP.
+// If the API says no (anonymous allowance used up, token rejected), the public
+// raw URL instead. Its CDN can be up to 5 minutes stale — fine for viewing, and
+// still safe for writing, because a write is pinned to the sha of what was read.
 async function fetchFile(auth, fetchFn) {
   let notice = null;
-  if (auth.token) {
-    try {
-      const bytes = await getBytes(fetchFn, `${apiUrl()}?ref=${encodeURIComponent(REPO.branch)}`, {
-        headers: { Authorization: `Bearer ${auth.token}`, Accept: 'application/vnd.github.raw+json' },
-        cache: 'no-store'
-      });
-      if (bytes) return { bytes, notice };
-    } catch (e) {
-      notice = `GitHub rejected the token (${e.message}) — update it in 🔑 settings to save changes`;
-    }
+  const headers = { Accept: 'application/vnd.github.raw+json' };
+  if (auth.token) headers.Authorization = `Bearer ${auth.token}`;
+  try {
+    const bytes = await getBytes(fetchFn, `${apiUrl()}?ref=${encodeURIComponent(REPO.branch)}`, { headers, cache: 'no-store' });
+    if (bytes) return { bytes, notice };
+  } catch (e) {
+    if (auth.token) notice = `GitHub rejected the token (${e.message}) — update it in 🔑 settings to save changes`;
   }
   return { bytes: await getBytes(fetchFn, rawUrl(), { cache: 'no-store' }), notice };
 }

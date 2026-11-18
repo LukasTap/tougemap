@@ -36,14 +36,25 @@ test('gitBlobSha matches `git hash-object`', async () => {
   assert.equal(await gitBlobSha(new TextEncoder().encode('hello\n')), 'ce013625030ba8dba906f756967f9e9ca394464a');
 });
 
-test('without a token: reads the public raw file and records its sha', async () => {
+test('without a token: reads through the API anonymously (fresh within ~60 s) and records the sha', async () => {
   const bytes = bytesOf(DATA);
-  const fetchFn = fakeFetch([[rawUrl(), () => fileResponse(bytes)]]);
+  const fetchFn = fakeFetch([[apiUrl(), () => fileResponse(bytes)]]);
   const res = await readRoads({}, { fetchFn });
   assert.equal(res.source, 'remote');
   assert.equal(res.sha, await gitBlobSha(bytes));
   assert.equal(res.data.roads[0].name, 'Test');
   assert.equal(fetchFn.calls.length, 1);
+  assert.equal(fetchFn.calls[0].opts.headers.Authorization, undefined);
+  assert.equal(fetchFn.calls[0].opts.headers.Accept, 'application/vnd.github.raw+json');
+});
+
+test('without a token: anonymous API allowance used up (403) → public raw file, no notice', async () => {
+  const bytes = bytesOf(DATA);
+  const fetchFn = fakeFetch([[apiUrl(), () => status(403)], [rawUrl(), () => fileResponse(bytes)]]);
+  const res = await readRoads({}, { fetchFn });
+  assert.equal(res.source, 'remote');
+  assert.equal(res.sha, await gitBlobSha(bytes));
+  assert.equal(res.notice, null);
 });
 
 test('with a token: reads through the API (raw media type), not the CDN', async () => {
@@ -72,19 +83,19 @@ test('GitHub unreachable and nothing cached → source "none", NOT a writable em
 });
 
 test('HTTP error → source "none" too', async () => {
-  const res = await readRoads({}, { fetchFn: fakeFetch([[rawUrl(), () => status(503)]]) });
+  const res = await readRoads({}, { fetchFn: fakeFetch([[apiUrl(), () => status(503)], [rawUrl(), () => status(503)]]) });
   assert.equal(res.source, 'none');
 });
 
 test('file does not exist yet (404) → empty but remote, so the first save can create it', async () => {
-  const res = await readRoads({}, { fetchFn: fakeFetch([[rawUrl(), () => status(404)]]) });
+  const res = await readRoads({}, { fetchFn: fakeFetch([[apiUrl(), () => status(404)], [rawUrl(), () => status(404)]]) });
   assert.equal(res.source, 'remote');
   assert.equal(res.sha, null);
 });
 
 test('encrypted file: no passphrase / wrong passphrase / right passphrase', async () => {
   const bytes = bytesOf(await encryptData(DATA, 'pw'));
-  const fetchFn = () => fakeFetch([[rawUrl(), () => fileResponse(bytes)]]);
+  const fetchFn = () => fakeFetch([[apiUrl(), () => fileResponse(bytes)]]);
   await assert.rejects(readRoads({}, { fetchFn: fetchFn() }), { code: 'ENCRYPTED_NO_PASS' });
   await assert.rejects(readRoads({ passphrase: 'nope' }, { fetchFn: fetchFn() }), { code: 'BAD_PASSPHRASE' });
   const res = await readRoads({ passphrase: 'pw' }, { fetchFn: fetchFn() });
