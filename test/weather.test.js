@@ -175,3 +175,64 @@ test('pointSummaries: each point\'s own worst fog and coldest hour, plus its nig
   assert.equal(s[0].risks.length, 11);
   assert.deepEqual(s[0].hours, [20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6]);
 });
+
+// ── road surface (estimate) ──
+function hourlySeries(rows, start = '2026-11-18T12:00') {
+  const base = new Date(start), p = (n) => String(n).padStart(2, '0');
+  const H = { time: [], temperature_2m: [], dew_point_2m: [], relative_humidity_2m: [], windspeed_10m: [], precipitation: [], et0_fao_evapotranspiration: [] };
+  rows.forEach(([rain, et0, temp = 5], i) => {
+    const t = new Date(base.getTime() + i * 3600000);
+    H.time.push(`${t.getFullYear()}-${p(t.getMonth() + 1)}-${p(t.getDate())}T${p(t.getHours())}:00`);
+    H.temperature_2m.push(temp); H.dew_point_2m.push(temp - 6); H.relative_humidity_2m.push(50); H.windspeed_10m.push(15);
+    H.precipitation.push(rain); H.et0_fao_evapotranspiration.push(et0);
+  });
+  return { hourly: H };
+}
+
+test('roadWater: summer sun dries a soaked road within ~an hour; a November night does not', async () => {
+  const { roadWater, ROAD_FILM_CAP_MM } = await import('../js/weather.js');
+  const summer = roadWater(hourlySeries([[4, 0], [0, 0.7], [0, 0.7]]));
+  assert.equal(summer[0], ROAD_FILM_CAP_MM, 'heavy rain fills the film to the cap, the rest runs off');
+  assert.equal(summer[2], 0);
+  const november = roadWater(hourlySeries([[2, 0.02], ...Array(10).fill([0, 0])]));
+  assert.ok(november.at(-1) > 0.9, `still wet after 10 dark hours: ${november.at(-1)}`);
+});
+
+test('surfaceOf: rain / wet / damp / dry, and black ice only where water and ≤3 °C meet', async () => {
+  const { surfaceOf } = await import('../js/weather.js');
+  const h = (water, rainMm, temp, hour = 23) => ({ water, rainMm, temp, hour });
+  assert.equal(surfaceOf([h(0, 0.4, 6)]).state, 'rain');
+  assert.equal(surfaceOf([h(0.5, 0, 6)]).state, 'wet');
+  assert.equal(surfaceOf([h(0.1, 0, 6)]).state, 'damp');
+  assert.equal(surfaceOf([h(0, 0, 6)]).state, 'dry');
+  assert.equal(surfaceOf([h(0, 0, -4)]).ice, null, 'cold but dry: no black ice');
+  assert.equal(surfaceOf([h(0.5, 0, 6), h(0, 0, 1)]).ice, null, 'wet and cold at different hours: none');
+  assert.deepEqual(surfaceOf([h(0.5, 0, 2, 1)]).ice, { level: 'possible', temp: 2, hour: 1 });
+  assert.equal(surfaceOf([h(0.5, 0, -1)]).ice.level, 'likely');
+});
+
+test('recentRain: the last rainy hour before now and the 24 h total', async () => {
+  const { recentRain } = await import('../js/weather.js');
+  const fc = hourlySeries([[1.5, 0], [0.5, 0], [0, 0], [0, 0], [0.05, 0]]); // 12:00 … 16:00
+  const r = recentRain(fc, new Date('2026-11-18T16:30:00'));
+  assert.equal(r.totalMm, 2.1);
+  assert.equal(r.last.getHours(), 13, 'a 0.05 mm trace is not rain');
+});
+
+test('nightHours carries water and rain per hour; pointSummaries the surface', async () => {
+  const { pointSummaries } = await import('../js/weather.js');
+  const fc = hourlySeries([[3, 0.05], ...Array(17).fill([0, 0, 1])], '2026-11-18T16:00'); // rain at 16:00, then dry, 1 °C
+  const now = new Date('2026-11-18T16:30:00');
+  const s = pointSummaries(roadConditions([{ label: 'Start', role: 'start', share: 1 }], [fc], now))[0];
+  assert.equal(s.surface.state, 'wet');
+  assert.equal(s.surface.ice.level, 'possible');
+});
+
+test('the forecast request includes yesterday and the rain/evaporation inputs', async () => {
+  const urls = [];
+  const client = createWeatherClient({ batchWindowMs: 1, fetchFn: async (u) => { urls.push(u); return { ok: true, json: async () => buildForecast(() => MILD) }; } });
+  await client.get(48.7, 19.1);
+  const q = new URL(urls[0]).searchParams;
+  assert.equal(q.get('past_days'), '1');
+  assert.match(q.get('hourly'), /precipitation,et0_fao_evapotranspiration/);
+});

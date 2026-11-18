@@ -395,3 +395,10 @@ path.leaflet-interactive:focus{outline:none !important}
   /* the layer column ended 5px inside the zoom buttons; lift it clear */
   #layer-toggle { bottom: 100px; }
 }
+/* road surface (estimate): one full-width box above the four tiles */
+.w-detail.w-wide{grid-column:1 / -1}
+.w-detail .wsub{font-size:10px;color:var(--text3);margin-top:3px;line-height:1.35}
+.w-detail .wsub.w-ice{color:#a8dcf0}
+.w-wet{color:#7fb6e8}
+/* legend entries hidden when tonight's map has none of them */
+#map-legend [hidden]{display:none !important}

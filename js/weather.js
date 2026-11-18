@@ -16,11 +16,39 @@ export function nightKeyOf(t) {
   return null; // daytime — not part of any night
 }
 
+// ── ROAD SURFACE (an estimate) ──────────────────────────────────────────────
+// Water left on the road, hour by hour, in mm: rain adds to it (up to what a
+// road holds before it runs off), evaporation takes it away. The drying figure
+// is Open-Meteo's hourly reference evapotranspiration (ET0, FAO) — sun,
+// temperature, humidity and wind already folded into one "drying power"
+// number. In summer it is ~0.6–0.8 mm/h at midday, so a wet road is dry within
+// an hour or two; in November it peaks around 0.1 mm/h and is ~0 at night, so a
+// road that is wet at dusk stays wet. The series starts with yesterday
+// (past_days=1), so an afternoon of rain is counted.
+//
+// It cannot see shade, puddles, wet leaves or which way a slope faces — the UI
+// calls it an estimate.
+export const ROAD_FILM_CAP_MM = 1.0; // more than this runs off
+export const DRYING_FACTOR = 1.5;    // dark, warm asphalt dries faster than the reference grass
+export const WET_MM = 0.2, DAMP_MM = 0.05, RAIN_MM = 0.1;
+
+export function roadWater(d) {
+  const H = d.hourly;
+  const rain = H.precipitation || [], et0 = H.et0_fao_evapotranspiration || [];
+  let w = 0;
+  return H.time.map((_, i) => {
+    w = Math.min(ROAD_FILM_CAP_MM, w + (rain[i] || 0));
+    w = Math.max(0, w - DRYING_FACTOR * (et0[i] || 0));
+    return Math.round(w * 1000) / 1000;
+  });
+}
+
 // Upcoming night hours, each with its per-hour fog risk. This is THE single
 // source that both the headline badge and the hourly strip read, so the two
 // can never drift apart again.
 export function nightHours(d, now) {
   const H = d.hourly;
+  const water = roadWater(d);
   const out = [];
   for (let i = 0; i < H.time.length; i++) {
     const t = new Date(H.time[i]);
@@ -33,11 +61,43 @@ export function nightHours(d, now) {
       temp: H.temperature_2m[i],
       wind: H.windspeed_10m[i],
       precip: H.precipitation_probability?.[i] ?? 0,
+      rainMm: H.precipitation?.[i] ?? 0,
+      water: water[i],
       risk: Math.round(nightFogRisk(
         H.temperature_2m[i] - H.dew_point_2m[i], H.relative_humidity_2m[i], H.windspeed_10m[i]))
     });
   }
   return out;
+}
+
+// The road over a set of hours: 'rain' if it rains in them, else 'wet' /
+// 'damp' / 'dry' by the most water left on it. Black ice: water on the road and
+// 3 °C or less in the SAME hour — 'likely' at or below 0 °C, 'possible' above.
+export const SURFACE_RANK = { dry: 0, damp: 1, wet: 2, rain: 3 };
+export function surfaceOf(hours) {
+  if (!hours.length) return null;
+  const water = Math.max(...hours.map(h => h.water ?? 0));
+  const rainMm = hours.reduce((s, h) => s + (h.rainMm ?? 0), 0);
+  const state = hours.some(h => (h.rainMm ?? 0) >= RAIN_MM) ? 'rain'
+    : water >= WET_MM ? 'wet' : water >= DAMP_MM ? 'damp' : 'dry';
+  const icy = hours.filter(h => ((h.water ?? 0) >= DAMP_MM || (h.rainMm ?? 0) >= RAIN_MM) && h.temp <= FROST_C);
+  const coldest = icy.reduce((c, h) => (!c || h.temp < c.temp ? h : c), null);
+  const ice = coldest ? { level: coldest.temp <= FREEZE_C ? 'likely' : 'possible', temp: coldest.temp, hour: coldest.hour } : null;
+  return { state, water: Math.round(water * 100) / 100, rainMm: Math.round(rainMm * 10) / 10, ice };
+}
+
+// The most recent rain before `now` (within the 36 h the series covers) and the
+// total over the 24 h before it — the "why" behind a wet road.
+export function recentRain(d, now) {
+  const H = d.hourly, rain = H.precipitation || [];
+  let last = null, total = 0;
+  for (let i = 0; i < H.time.length; i++) {
+    const t = new Date(H.time[i]);
+    if (t > now) break;
+    if (now - t <= 24 * 3600 * 1000) total += rain[i] || 0;
+    if ((rain[i] || 0) >= RAIN_MM) last = t;
+  }
+  return { last, totalMm: Math.round(total * 10) / 10 };
 }
 
 // Split the flat hour list into nights, in order. A night is keyed by the date
@@ -111,6 +171,7 @@ export function pointSummaries(conditions) {
       ele: typeof p.ele === 'number' ? Math.round(p.ele) : null,
       fog: hrs.length ? Math.max(...hrs.map(h => h.risk)) : null,
       temp: hrs.length ? Math.min(...hrs.map(h => h.temp)) : null,
+      surface: surfaceOf(hrs),       // road water / black ice over the same hours
       risks: night.map(h => h.risk), // the whole night, for the card rows
       hours: night.map(h => h.hour)  // which hour each of those is (the night may be part-spent)
     };
@@ -387,7 +448,8 @@ export function buildNightChart(groups, geom = CHART) {
   };
 }
 
-const HOURLY = 'temperature_2m,relative_humidity_2m,dew_point_2m,precipitation_probability,weathercode,windspeed_10m';
+// precipitation + et0 feed the road-surface estimate; past_days=1 gives it yesterday's rain.
+const HOURLY = 'temperature_2m,relative_humidity_2m,dew_point_2m,precipitation_probability,weathercode,windspeed_10m,precipitation,et0_fao_evapotranspiration';
 
 // Forecasts per POINT (~1 km cells — the old 10 km grid would have merged a
 // road's valley and summit into one forecast). Requests made close together are
@@ -412,7 +474,7 @@ export function createWeatherClient({
       // forecast_days=3, not 2: the window starts at 00:00 TODAY, so 2 days ends
       // at 23:00 tomorrow and cuts tomorrow night (20:00→06:00) off after 4
       // hours. 3 days covers both nights in full.
-      const url = `https://api.open-meteo.com/v1/forecast?latitude=${q('lat')}&longitude=${q('lon')}&hourly=${HOURLY}&forecast_days=3&timezone=auto`;
+      const url = `https://api.open-meteo.com/v1/forecast?latitude=${q('lat')}&longitude=${q('lon')}&hourly=${HOURLY}&past_days=1&forecast_days=3&timezone=auto`;
       fetchFn(url)
         .then(r => { if (!r.ok) throw new Error('wx ' + r.status); return r.json(); })
         .then(json => {

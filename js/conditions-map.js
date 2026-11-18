@@ -37,11 +37,15 @@ export function showConditionsOnMap(entries) {
   conditionsGroup.clearLayers();
   const ring = OUTLINE[isNight() ? 'night' : 'day'];
   const outlines = [], edges = [], lines = [];
+  let frost = 0, ice = 0;
   for (const { road, conditions } of entries) {
     if (!conditions || !road.points?.length) continue;
     for (const { point, latlngs } of splitRoadSections(road.points, pointSummaries(conditions))) {
-      if (point.temp != null && point.temp <= FROST_C)
-        outlines.push(line(latlngs, point.temp <= FREEZE_C ? ring.ice : ring.frost, 15, 0.95));
+      if (point.temp != null && point.temp <= FROST_C) {
+        const isIce = point.temp <= FREEZE_C;
+        isIce ? ice++ : frost++;
+        outlines.push(line(latlngs, isIce ? ring.ice : ring.frost, 15, 0.95));
+      }
       // A thin dark edge, so the pale fog colours (yellow, lavender) hold up on light tiles.
       edges.push(line(latlngs, EDGE, 7.5, 0.55));
       lines.push(line(latlngs, point.fog != null ? fogColor(point.fog) : NO_DATA, 5));
@@ -52,6 +56,13 @@ export function showConditionsOnMap(entries) {
   for (const l of [...outlines, ...edges, ...lines]) l.addTo(conditionsGroup);
   if (!map.hasLayer(conditionsGroup)) conditionsGroup.addTo(map);
   setSavedRoadsMuted(true);
+  // The legend lists only what tonight's map shows: frost / ice entries appear
+  // when such outlines are actually drawn — most of the year they aren't, and
+  // two swatches for nothing are just noise.
+  const show = (id, on) => { const el = document.getElementById(id); if (el) el.hidden = !on; };
+  show('lg-frost-item', frost > 0);
+  show('lg-ice-item', ice > 0);
+  show('lg-cold-row', frost + ice > 0);
   document.getElementById('map-legend')?.classList.add('on');
 }
 

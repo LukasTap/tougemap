@@ -10,7 +10,7 @@ import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
 import {
   createWeatherClient, wmoDesc, nightGroups, nightExtremes, decisionHours,
   buildNightChart, axisLabelIndices, LABEL_W, roadConditions, currentReadings, pointSummaries,
-  scrubPoints, nearestScrubPoint
+  scrubPoints, nearestScrubPoint, SURFACE_RANK, recentRain
 } from './weather.js';
 import { roadProfile, pickWeatherPoints, withShares, needsTerrain, computeTerrain } from './terrain.js';
 import { showConditionsOnMap, hideConditionsOnMap } from './conditions-map.js';
@@ -502,6 +502,41 @@ function profileSvg(profile, pointStats) {
 // it's worst, and four night-scoped tiles. Every number is the worst of the
 // road's forecast points (start / summit / end / low point), and says which
 // point it came from whenever there is more than one.
+// ── ROAD SURFACE (estimate, weather.js surfaceOf) ───────────────────────────
+const SURFACE_WORD = { rain: 'Rain', wet: 'Wet', damp: 'Damp', dry: 'Dry' };
+
+// The short word on a point's row: nothing when dry, so only the news shows.
+function surfaceNote(s) {
+  if (!s || s.state === 'dry') return '';
+  return ` · <span class="w-wet">${SURFACE_WORD[s.state].toLowerCase()}</span>`;
+}
+
+// One full-width box: how wet the road is over the driving hours (its worst
+// point), why (the last rain), and — the part that matters most — whether
+// water and ≤3 °C meet anywhere: black ice. Labelled an estimate on purpose.
+function roadSurfaceHtml(cond, pointStats, now, multi) {
+  const withS = pointStats.map((p, i) => ({ ...p, forecast: cond.points[i]?.forecast })).filter(p => p.surface);
+  if (!withS.length) return '';
+  const worst = withS.reduce((a, b) => (SURFACE_RANK[b.surface.state] > SURFACE_RANK[a.surface.state] ? b : a));
+  // Name the point only when it differs from the rest; the same everywhere is "whole road".
+  const everywhere = withS.every(p => p.surface.state === worst.surface.state);
+  const where = multi && worst.surface.state !== 'dry'
+    ? `<span class="wat"> · ${everywhere ? 'whole road' : escapeHtml(worst.label.toLowerCase())}</span>` : '';
+  const rain = worst.forecast ? recentRain(worst.forecast, now) : null;
+  const why = worst.surface.state === 'rain' ? `${worst.surface.rainMm} mm forecast in these hours`
+    : rain?.last ? `${rain.totalMm} mm in the last 24 h, last at ${hh(rain.last.getHours())}:00${worst.surface.state === 'dry' ? ' — dried since' : ''}`
+    : 'no rain in the last 24 h';
+  const icy = withS.filter(p => p.surface.ice).sort((a, b) => a.surface.ice.temp - b.surface.ice.temp)[0];
+  const ice = icy
+    ? `<div class="wsub w-ice">Black ice ${icy.surface.ice.level}${multi ? ` at ${escapeHtml(icy.label.toLowerCase())}` : ''}: wet and ${Math.round(icy.surface.ice.temp)}°C around ${hh(icy.surface.ice.hour)}:00</div>`
+    : '';
+  return `<div class="w-detail w-wide">
+      <div class="wlbl">Road surface · estimate</div>
+      <div class="wval ${worst.surface.state !== 'dry' ? 'w-wet' : ''}">${SURFACE_WORD[worst.surface.state]}${where}</div>
+      <div class="wsub">${why}</div>${ice}
+    </div>`;
+}
+
 function weatherHtml(cond, profile) {
   const now = appState.now();
   const multi = cond.points.length > 1;
@@ -524,9 +559,10 @@ function weatherHtml(cond, profile) {
         <i class="where-dot" style="background:${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}"></i>
         <span class="where-name"><b class="where-mark">${POINT_MARK[p.role] || ""}</b> ${escapeHtml(p.label)}</span>
         <span class="where-ele">${p.ele != null ? `${p.ele} m` : ''}</span>
-        <span class="where-val">${p.fog != null ? `fog ${p.fog}%` : '—'}${p.temp != null ? ` · <span class="${p.temp <= 3 ? 'w-ice' : ''}">${Math.round(p.temp)}°C</span>` : ''}</span>
+        <span class="where-val">${p.fog != null ? `fog ${p.fog}%` : '—'}${p.temp != null ? ` · <span class="${p.temp <= 3 ? 'w-ice' : ''}">${Math.round(p.temp)}°C</span>` : ''}${surfaceNote(p.surface)}</span>
       </div>`).join('')}</div>` : '';
   const where = profileSvg(profile, pointStats) + rows;
+  const road = roadSurfaceHtml(cond, pointStats, now, multi);
 
   const tile = (k, v, when, cls) =>
     `<div class="w-detail"><div class="wlbl">${k}</div><div class="wval ${cls || ''}">${v}${when ? `<span class="wat"> at ${when}</span>` : ''}</div></div>`;
@@ -548,7 +584,7 @@ function weatherHtml(cond, profile) {
       : '<div style="font-size:11px;color:var(--text3);padding:4px 0 8px">No night hours in window</div>'}
     ${scope ? `<div class="hourly-title tiles-scope">${scope}</div>` : ''}
     ${where ? `<div class="where">${where}</div>` : ''}
-    <div class="weather-details">${tiles}</div>`;
+    <div class="weather-details">${road}${tiles}</div>`;
   return { html, chart, multi };
 }
 

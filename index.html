@@ -147,9 +147,10 @@
           <span><i style="background:#8090c8"></i>60–79</span>
           <span><i style="background:#c8b4ff"></i>80+</span>
         </div>
-        <div class="lg-row">
-          <span><i class="lg-casing lg-frost"></i>frost 0–3°C</span>
-          <span><i class="lg-casing lg-ice"></i>ice ≤0°C</span>
+        <!-- shown only when tonight's map actually has these outlines (conditions-map.js) -->
+        <div class="lg-row" id="lg-cold-row">
+          <span id="lg-frost-item"><i class="lg-casing lg-frost"></i>frost 0–3°C</span>
+          <span id="lg-ice-item"><i class="lg-casing lg-ice"></i>ice ≤0°C</span>
         </div>
       </div>
       <div id="layer-toggle">
