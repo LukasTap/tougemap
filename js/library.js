@@ -27,6 +27,7 @@ export function escapeHtml(s) {
 }
 
 export function thumbnailSvg(points) {
+  if (!points || points.length < 2) return '<svg class="road-thumb" viewBox="0 0 100 44"></svg>';
   const pts = simplifyForThumbnail(points, 40);
   const lats = pts.map(p => p.lat), lons = pts.map(p => p.lon);
   const minLat = Math.min(...lats), maxLat = Math.max(...lats);
@@ -46,24 +47,25 @@ export function thumbnailSvg(points) {
 // working out which chip was the surface. Character comes last and uncoloured:
 // it is the one tag that says why you would GO, not what could go wrong, and
 // dressing it like a rank implied an order it does not have.
-export function metaChipsHtml(meta) {
+export function metaChipsHtml(meta = {}) {
+  const e = escapeHtml;
   const chips = [];
-  if (meta.pavement)  chips.push(`<span class="meta-chip pave-${meta.pavement}">🛣 ${meta.pavement}</span>`);
-  if (meta.deer)      chips.push(`<span class="meta-chip deer-${meta.deer}">🦌 ${meta.deer}</span>`);
-  if (meta.character) chips.push(`<span class="meta-chip chip-kind">${meta.character}</span>`);
+  if (meta.pavement)  chips.push(`<span class="meta-chip pave-${e(meta.pavement)}">🛣 ${e(meta.pavement)}</span>`);
+  if (meta.deer)      chips.push(`<span class="meta-chip deer-${e(meta.deer)}">🦌 ${e(meta.deer)}</span>`);
+  if (meta.character) chips.push(`<span class="meta-chip chip-kind">${e(meta.character)}</span>`);
   return chips.join('');
 }
 
 export function roadCardHtml(road, { risks = null } = {}) {
   // Distance by road (km) is the metric we trust — drive-time is unreliable on
   // the SK network, so it stays a subnote in the inspector and never appears here.
-  const dh = road.driveTimeFromHome?.km != null ? `${road.driveTimeFromHome.km} km from home` : '— from home';
+  const dh = road.driveTimeFromHome?.km != null ? `${escapeHtml(road.driveTimeFromHome.km)} km from home` : '— from home';
   const fog = risks ? fogStripHtml(risks) : '';
   return `
-    <div class="road-lib-item" data-id="${road.id}">
+    <div class="road-lib-item" data-id="${escapeHtml(road.id)}">
       ${thumbnailSvg(road.points)}
       <div class="road-lib-name">${escapeHtml(road.name)}</div>
-      <div class="road-lib-meta"><span>${road.km} km long</span><span>${dh}</span></div>
+      <div class="road-lib-meta"><span>${escapeHtml(road.km)} km long</span><span>${dh}</span></div>
       ${fog}
       <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
     </div>`;

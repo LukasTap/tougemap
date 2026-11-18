@@ -10,3 +10,12 @@ export const REPO = {
   branch: 'main',
   path: 'roads.json'
 };
+
+// Local development only: open http://localhost:<port>/?fixture to load the
+// made-up sample roads in dev/fixture-roads.json instead of the real library.
+// Saving is switched off in that mode. Never active on the deployed site.
+const isLocalHost = typeof location !== 'undefined' &&
+  /^(localhost|127\.0\.0\.1|\[::1\])$/.test(location.hostname);
+export const DEV_FIXTURE = isLocalHost && new URLSearchParams(location.search).has('fixture')
+  ? 'dev/fixture-roads.json'
+  : null;

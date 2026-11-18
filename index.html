@@ -2,10 +2,11 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TougeMap</title>
   <link rel="manifest" href="manifest.json">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.css"/>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css"
+        integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="anonymous"/>
   <link href="https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&family=Barlow:wght@300;400;500;600&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="styles.css">
 </head>
@@ -94,18 +95,8 @@
       </div>
 
       <!-- TONIGHT VIEW -->
+      <!-- controls are rendered by app.js inside the list, so the phone gets them too -->
       <div class="view-panel" id="view-tonight" data-view="tonight" style="display:none;flex-direction:column;flex:1;overflow:hidden">
-        <div style="padding:10px 16px;display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--border)">
-          <span id="tonight-updated" style="font-size:10px;color:var(--text3);font-family:'Space Mono',monospace">Not loaded yet</span>
-          <button class="pt-btn" id="tonight-refresh">↻ Refresh</button>
-        </div>
-        <div style="padding:10px 16px;display:flex;align-items:center;gap:8px;border-bottom:1px solid var(--border)">
-          <label style="display:flex;align-items:center;gap:6px;font-size:11px;color:var(--text2)">
-            <input type="checkbox" id="tonight-reachable-toggle"> Within
-          </label>
-          <input type="number" id="tonight-reachable-km" value="100" min="10" step="10" style="width:56px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:3px 6px;font-size:11px">
-          <span style="font-size:11px;color:var(--text3)">km of home</span>
-        </div>
         <div id="tonight-list" style="flex:1;overflow-y:auto;padding:8px 16px"></div>
       </div>
 
@@ -146,6 +137,7 @@
 
     <div id="map-wrap">
       <div id="map"></div>
+      <div id="status-banner" role="status" aria-live="polite"></div>
       <div id="layer-toggle">
         <button class="layer-btn active" id="btn-osm">OSM</button>
         <button class="layer-btn" id="btn-topo">Topo</button>
@@ -213,11 +205,13 @@
           <button type="submit" class="btn-planner primary" id="ob-submit" style="flex:1">UNLOCK</button>
           <button type="button" class="btn-planner secondary" id="ob-cancel" style="flex:0 0 auto;display:none">Cancel</button>
         </div>
+        <button type="button" class="btn-planner secondary" id="ob-forget" style="display:none;margin-top:14px">Forget this device</button>
       </form>
     </div>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js"
+          integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin="anonymous"></script>
   <script type="module" src="js/app.js"></script>
 </body>
 </html>

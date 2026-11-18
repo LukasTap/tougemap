@@ -1,9 +1,17 @@
-// js/sync.js — GitHub read (public raw) + write (token), with the roads library
-// encrypted at rest (see crypto.js) so the public repo holds only gibberish.
-// Repo coordinates come from config.js (baked in, not asked on every visit).
-import { migrate, emptyData, cacheRead, cacheWrite } from './store.js';
+// js/sync.js — GitHub read + write of roads.json, with the library encrypted at
+// rest (see crypto.js) so the public repo holds only gibberish. Repo coordinates
+// come from config.js.
+//
+// Reads return { data, sha, source }:
+//   source 'remote'  — fresh from GitHub; `sha` is the git id of the exact file read
+//   source 'cache'   — GitHub unreachable, last good copy from IndexedDB (read-only)
+//   source 'none'    — GitHub unreachable and nothing cached (read-only, empty)
+//   source 'fixture' — local dev sample data (read-only), see config.js
+// Writes are pinned to the sha the data was loaded at (see repo.js), so a stale
+// copy can never silently overwrite a newer file: GitHub answers 409 instead.
+import { migrate, emptyData, cacheRead, cacheWrite, cacheClear } from './store.js';
 import { fetchWithTimeout } from './http.js';
-import { REPO } from './config.js';
+import { REPO, DEV_FIXTURE } from './config.js';
 import { isEncrypted, encryptData, decryptData } from './crypto.js';
 
 const defaultFetch = (u, o) => fetchWithTimeout(u, o, 15000);
@@ -11,18 +19,28 @@ const API = 'https://api.github.com';
 const TOKEN_KEY = 'tougemap_token';
 const PASS_KEY = 'tougemap_pass';
 
-// ── Local auth: token = write credential (PC only), passphrase = decrypt key.
-// Both live only in this device's localStorage — never committed or in a URL.
+// ── Local auth: token = write credential, passphrase = decrypt key. Both live
+// only in this device's localStorage — never committed or put in a URL.
+function store() { try { return globalThis.localStorage ?? null; } catch { return null; } }
 export function loadAuth() {
-  return { token: localStorage.getItem(TOKEN_KEY) || null, passphrase: localStorage.getItem(PASS_KEY) || null };
+  const ls = store();
+  return { token: ls?.getItem(TOKEN_KEY) || null, passphrase: ls?.getItem(PASS_KEY) || null };
 }
-export function saveToken(t) { t ? localStorage.setItem(TOKEN_KEY, t) : localStorage.removeItem(TOKEN_KEY); }
-export function savePassphrase(p) { p ? localStorage.setItem(PASS_KEY, p) : localStorage.removeItem(PASS_KEY); }
-export function clearToken() { localStorage.removeItem(TOKEN_KEY); }
-export function clearPassphrase() { localStorage.removeItem(PASS_KEY); }
+export function saveToken(t) { const ls = store(); if (ls) t ? ls.setItem(TOKEN_KEY, t) : ls.removeItem(TOKEN_KEY); }
+export function savePassphrase(p) { const ls = store(); if (ls) p ? ls.setItem(PASS_KEY, p) : ls.removeItem(PASS_KEY); }
+
+// "Forget this device": token, passphrase and the decrypted offline copy.
+export async function forgetDevice() {
+  saveToken(null);
+  savePassphrase(null);
+  await cacheClear();
+}
 
 export function rawUrl() {
   return `https://raw.githubusercontent.com/${REPO.owner}/${REPO.repo}/${REPO.branch}/${REPO.path}`;
+}
+export function apiUrl() {
+  return `${API}/repos/${REPO.owner}/${REPO.repo}/contents/${REPO.path}`;
 }
 
 export function encodeContent(obj) {
@@ -31,16 +49,48 @@ export function encodeContent(obj) {
   return Buffer.from(json, 'utf8').toString('base64'); // Node/test path
 }
 
-// Fetch + parse the raw file (encrypted envelope OR plaintext). Throws on network/HTTP error.
-async function fetchRaw(fetchFn) {
-  const res = await fetchFn(rawUrl() + '?t=' + Date.now(), { cache: 'no-store' });
+// Git's object id for a file's bytes — the same `sha` GitHub reports for it, so
+// a file read from the public raw URL can still be written back safely.
+export async function gitBlobSha(bytes) {
+  const head = new TextEncoder().encode(`blob ${bytes.length}\0`);
+  const buf = new Uint8Array(head.length + bytes.length);
+  buf.set(head);
+  buf.set(bytes, head.length);
+  const digest = new Uint8Array(await crypto.subtle.digest('SHA-1', buf));
+  return [...digest].map(b => b.toString(16).padStart(2, '0')).join('');
+}
+
+async function getBytes(fetchFn, url, opts) {
+  const res = await fetchFn(url, opts);
+  if (res.status === 404) return null; // file doesn't exist yet
   if (!res.ok) throw new Error('read ' + res.status);
-  return res.json();
+  return new Uint8Array(await res.arrayBuffer());
+}
+
+// The file's exact bytes. With a token, through the API, which is never served
+// from a CDN — so a reload right after a save sees that save. Without one (or if
+// the API refuses the token), from the public raw URL, which GitHub's CDN can
+// serve up to 5 minutes stale: fine for viewing, and still safe for writing
+// because the write is pinned to the sha of what was actually read.
+async function fetchFile(auth, fetchFn) {
+  let notice = null;
+  if (auth.token) {
+    try {
+      const bytes = await getBytes(fetchFn, `${apiUrl()}?ref=${encodeURIComponent(REPO.branch)}`, {
+        headers: { Authorization: `Bearer ${auth.token}`, Accept: 'application/vnd.github.raw+json' },
+        cache: 'no-store'
+      });
+      if (bytes) return { bytes, notice };
+    } catch (e) {
+      notice = `GitHub rejected the token (${e.message}) — update it in 🔑 settings to save changes`;
+    }
+  }
+  return { bytes: await getBytes(fetchFn, rawUrl(), { cache: 'no-store' }), notice };
 }
 
 // Parsed file → plain v2 data, decrypting when needed. Throws Error with a `code`
 // of 'ENCRYPTED_NO_PASS' (locked, no passphrase) or 'BAD_PASSPHRASE' (wrong one)
-// so the UI can prompt. Plaintext files pass straight through (transition state).
+// so the UI can prompt. Plaintext files pass straight through.
 async function toPlain(raw, passphrase) {
   if (isEncrypted(raw)) {
     if (!passphrase) { const e = new Error('Locked — passphrase required'); e.code = 'ENCRYPTED_NO_PASS'; throw e; }
@@ -52,82 +102,56 @@ async function toPlain(raw, passphrase) {
   return migrate(raw);
 }
 
+async function fromCache(error) {
+  const cached = await cacheRead();
+  return cached
+    ? { data: migrate(cached), sha: null, source: 'cache', error }
+    : { data: emptyData(), sha: null, source: 'none', error };
+}
+
 export async function readRoads(auth = {}, { fetchFn = defaultFetch } = {}) {
+  if (DEV_FIXTURE) {
+    const res = await fetchFn(DEV_FIXTURE, { cache: 'no-store' });
+    return { data: migrate(await res.json()), sha: null, source: 'fixture' };
+  }
+  let file;
+  try { file = await fetchFile(auth, fetchFn); }
+  catch (error) { return fromCache(error); }
+  // No file yet: a brand-new repo. Empty is the truth here, and the first save creates it.
+  if (!file.bytes) return { data: emptyData(), sha: null, source: 'remote', notice: file.notice };
   let raw;
-  try { raw = await fetchRaw(fetchFn); }
-  catch { return (await cacheRead()) || emptyData(); } // offline/HTTP error → last good cache
+  try { raw = JSON.parse(new TextDecoder().decode(file.bytes)); }
+  catch { return fromCache(new Error('roads.json on GitHub is not valid JSON')); }
   const data = await toPlain(raw, auth.passphrase); // lock errors bubble up to the caller
   await cacheWrite(data);
-  return data;
+  return { data, sha: await gitBlobSha(file.bytes), source: 'remote', notice: file.notice };
 }
 
-async function currentSha(token, fetchFn) {
-  const url = `${API}/repos/${REPO.owner}/${REPO.repo}/contents/${REPO.path}?ref=${REPO.branch}`;
-  // cache: 'no-store' is essential — a browser-cached GET returns a STALE sha,
-  // making every PUT 409 forever ("does not match").
-  const res = await fetchFn(url, { headers: { Authorization: `Bearer ${token}` }, cache: 'no-store' });
-  if (res.status === 404) return null; // file doesn't exist yet
-  if (!res.ok) throw new Error('sha ' + res.status);
-  return (await res.json()).sha;
-}
-
-async function putContent(token, payload, sha, fetchFn) {
-  const url = `${API}/repos/${REPO.owner}/${REPO.repo}/contents/${REPO.path}`;
-  // Generic commit message — deliberately does NOT include the road count, to
-  // avoid leaking metadata about an otherwise-encrypted file.
-  const body = { message: 'Update roads', content: encodeContent(payload), branch: REPO.branch, ...(sha ? { sha } : {}) };
-  return fetchFn(url, {
+// Writes `data` as the new roads.json, replacing exactly the version `baseSha`
+// names (null = the file must not exist yet). Returns the new file's sha.
+export async function writeRoads(auth = {}, data, baseSha, { fetchFn = defaultFetch } = {}) {
+  if (!auth.token) throw new Error('No GitHub token on this device — add one in 🔑 settings');
+  let payload = data;
+  if (auth.passphrase) {
+    payload = await encryptData(data, auth.passphrase);
+    // Prove the envelope opens before it replaces the only live copy.
+    const check = await decryptData(payload, auth.passphrase);
+    if (JSON.stringify(check) !== JSON.stringify(data)) throw new Error('Encryption self-check failed — NOT saved');
+  }
+  // Generic commit message — deliberately says nothing about the contents.
+  const body = { message: 'Update roads', content: encodeContent(payload), branch: REPO.branch, ...(baseSha ? { sha: baseSha } : {}) };
+  const res = await fetchFn(apiUrl(), {
     method: 'PUT',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
+    headers: { Authorization: `Bearer ${auth.token}`, 'Content-Type': 'application/json', Accept: 'application/vnd.github+json' },
     body: JSON.stringify(body)
   });
-}
-
-const delay = (ms) => new Promise(r => setTimeout(r, ms));
-
-// Does the remote already hold exactly our data? (Decrypts the remote first, so
-// it works despite each encryption using a random iv/salt.) Turns a lost sha-race
-// into a success instead of a false error.
-async function remoteMatches(auth, data, fetchFn) {
-  try {
-    const plain = await toPlain(await fetchRaw(fetchFn), auth.passphrase);
-    return JSON.stringify(plain) === JSON.stringify(migrate(data));
-  } catch { return false; }
-}
-
-// Serialize writes so two rapid saves never race the same sha.
-let writeChain = Promise.resolve();
-
-export function writeRoads(auth, data, opts = {}) {
-  const run = writeChain.then(() => doWriteRoads(auth, data, opts));
-  writeChain = run.then(() => {}, () => {});
-  return run;
-}
-
-async function doWriteRoads(auth = {}, data, { fetchFn = defaultFetch } = {}) {
-  if (!auth.token) throw new Error('No GitHub token configured');
-  // Encrypt once (if a passphrase is set); the same envelope is PUT on every retry.
-  const payload = auth.passphrase ? await encryptData(data, auth.passphrase) : data;
-  for (let attempt = 0; attempt < 3; attempt++) {
-    const sha = await currentSha(auth.token, fetchFn);
-    const res = await putContent(auth.token, payload, sha, fetchFn);
-    if (res.ok) { await cacheWrite(data); return; }
-    if (res.status === 409 || res.status === 422) {
-      if (attempt < 2) { await delay(400 * (attempt + 1)); continue; }
-      if (await remoteMatches(auth, data, fetchFn)) { await cacheWrite(data); return; }
-      throw new Error('Conflict — the roads file changed elsewhere; reload and try again.');
-    }
-    throw new Error('write ' + res.status + ' — check token scope (contents: read/write)');
+  if (res.status === 409 || res.status === 422) {
+    const e = new Error(`The roads file changed since this page loaded it (${res.status}). Reload to get the latest, then redo the change — NOT saved.`);
+    e.code = 'CONFLICT';
+    throw e;
   }
-}
-
-export async function testConnection(auth = {}, { fetchFn = defaultFetch } = {}) {
-  try {
-    const res = await fetchFn(`${API}/repos/${REPO.owner}/${REPO.repo}`, {
-      headers: auth.token ? { Authorization: `Bearer ${auth.token}` } : {}, cache: 'no-store'
-    });
-    if (res.ok) return { ok: true, message: 'Connected' };
-    if (res.status === 404) return { ok: false, message: `Repo ${REPO.owner}/${REPO.repo} not found — check config.js` };
-    return { ok: false, message: `GitHub returned ${res.status}` };
-  } catch (e) { return { ok: false, message: e.message }; }
+  if (!res.ok) throw new Error(`write ${res.status} — check the token (needs Contents: read & write on this repo) — NOT saved`);
+  const json = await res.json();
+  await cacheWrite(data);
+  return json?.content?.sha ?? null;
 }

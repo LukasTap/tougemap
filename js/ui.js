@@ -65,15 +65,8 @@ export function openSheet(title, contentHtml, state = 'half') {
   sheet.className = state;
 }
 
-export function closeSheet() {
+function closeSheet() {
   document.getElementById('bottom-sheet').className = 'peek';
-}
-
-export function peekSheet(title) {
-  const sheet = document.getElementById('bottom-sheet');
-  document.getElementById('sheet-title-text').textContent = title;
-  sheet.classList.remove('open', 'half');
-  sheet.classList.add('peek');
 }
 
 export function initSheetDrag() {
@@ -160,11 +153,18 @@ function wireModal() {
 // (re)encrypts. Nothing is logged. Two modes share the #onboard overlay.
 const $ = (id) => document.getElementById(id);
 
+// Runs the submit handler with the button locked; a failure is shown in the form
+// (it used to vanish as an unhandled rejection, leaving the form looking stuck).
 function runSubmit(fn) {
   const btn = $('ob-submit');
+  const errEl = $('ob-error');
   const label = btn ? btn.textContent : '';
   if (btn) { btn.disabled = true; btn.textContent = 'Working…'; }
-  return Promise.resolve().then(fn).finally(() => { if (btn) { btn.disabled = false; btn.textContent = label; } });
+  return Promise.resolve().then(fn)
+    .catch(err => {
+      if (errEl) { errEl.textContent = err?.message || String(err); errEl.style.display = 'block'; }
+    })
+    .finally(() => { if (btn) { btn.disabled = false; btn.textContent = label; } });
 }
 
 // UNLOCK: one passphrase field. Shown only when the file is encrypted and we
@@ -178,6 +178,7 @@ export function showUnlock({ message = '', onSubmit }) {
   $('ob-pass2-row').style.display = 'none';
   $('ob-token-row').style.display = 'none';
   $('ob-cancel').style.display = 'none';
+  $('ob-forget').style.display = 'none';
   $('ob-submit').textContent = 'UNLOCK';
   const errEl = $('ob-error');
   errEl.textContent = message || ''; errEl.style.display = message ? 'block' : 'none';
@@ -192,7 +193,7 @@ export function showUnlock({ message = '', onSubmit }) {
 
 // SETTINGS: token + (optional) set/CHANGE passphrase, confirmed by re-typing so a
 // typo can't silently lock you out. Cancelable. Opened from the 🔑 button.
-export function showSettings({ hasToken = false, hasPassphrase = false, onSubmit, onCancel }) {
+export function showSettings({ hasToken = false, hasPassphrase = false, onSubmit, onCancel, onForget }) {
   $('onboard').style.display = 'flex';
   $('ob-subtitle').textContent = '// settings';
   $('ob-desc').innerHTML = hasPassphrase
@@ -209,6 +210,9 @@ export function showSettings({ hasToken = false, hasPassphrase = false, onSubmit
   passEl.value = ''; pass2El.value = ''; tokEl.value = '';
   setTimeout(() => tokEl.focus(), 50);
   $('ob-cancel').onclick = () => { hideOnboarding(); if (onCancel) onCancel(); };
+  const forgetBtn = $('ob-forget');
+  forgetBtn.style.display = onForget && (hasToken || hasPassphrase) ? '' : 'none';
+  forgetBtn.onclick = () => { if (onForget) onForget(); };
   $('onboard-form').onsubmit = (e) => {
     e.preventDefault();
     const passphrase = passEl.value, passphrase2 = pass2El.value, token = tokEl.value.trim();
@@ -227,6 +231,14 @@ export function registerServiceWorker() {
 }
 
 // ── MISC ─────────────────────────────────────────────────────────────────────
+// One line over the map saying why the app is read-only (or null to hide it).
+export function setStatusBanner(msg, kind = 'info') {
+  const el = document.getElementById('status-banner');
+  if (!el) return;
+  el.textContent = msg || '';
+  el.className = msg ? `on ${kind}` : '';
+}
+
 export function setDiscoverStatus(msg, cls = '') {
   const el = document.getElementById('discover-status');
   if (!el) return;

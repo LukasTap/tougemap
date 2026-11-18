@@ -1,13 +1,11 @@
 // js/planner.js — PC-only road creation/editing: draw via OSRM, save/edit/delete,
 // set home, cache drive-time-from-home. Browser module (Leaflet global `L` + DOM
-// via callbacks) — not unit-tested, verified live (Task 14). Ported from v1
-// tryRouting (L1815–1855), setRoutePoint/waypoints (L1743–1810), calcRoadDistance
-// (L2031–2069), with all localStorage persistence replaced by writeRoads().
+// via callbacks). Persistence goes through appState.repo.commit() (repo.js):
+// nothing here mutates appState.data directly.
 
 import { map, savedGroup } from './map.js';
 import { route, nearestPoint, airFallback } from './routing.js';
 import { polylineKm } from './geo.js';
-import { writeRoads, loadAuth } from './sync.js';
 import { normalizeRoad } from './store.js';
 
 const SAVED_COLOR = '#b000ff'; // saved roads always render deep purple (no per-road color in v2)
@@ -22,18 +20,16 @@ function hitWeight() {
   return coarse ? 30 : 12;
 }
 
-// Auth for writes: { token, passphrase } — token authorizes the commit,
-// passphrase encrypts the payload (both handled inside writeRoads).
-function getCfg(appState) {
-  return appState.auth || loadAuth();
+// Fail fast, before any slow OSRM work, when a save could not go through anyway
+// (offline, no token, library not loaded from GitHub). commit() re-checks.
+function assertWritable(appState) {
+  const block = appState.repo.writeBlock(appState.auth);
+  if (block) throw new Error(block);
 }
 
-// Guards every write path against a doomed network attempt while offline (spec §3.3).
-// Thrown before any appState.data mutation so callers' in-memory state stays consistent.
-function assertOnline() {
-  if (typeof navigator !== 'undefined' && navigator.onLine === false) {
-    throw new Error("You're offline — changes can't be saved right now");
-  }
+function localDate(d = new Date()) {
+  const p = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`;
 }
 
 // ── DRAFT / ROUTE-DRAWING STATE ─────────────────────────────────────────────
@@ -163,7 +159,13 @@ export function clearWaypoints() {
   tryRouting();
 }
 
+// Bumped on every new routing request and every clear, so a slow OSRM reply for
+// an older set of points can't land on top of a newer route (or a cleared one) —
+// and become what gets saved.
+let routeSeq = 0;
+
 export function clearDraft() {
+  routeSeq++;
   draftPoints = [];
   if (draftPolyline) { draftPolyline.remove(); draftPolyline = null; }
 }
@@ -172,10 +174,12 @@ async function tryRouting() {
   const { start, end } = routePoints;
   if (!start || !end) { clearDraft(); notifyDraft({ status: 'idle' }); return; }
 
+  const seq = ++routeSeq;
   notifyDraft({ status: 'routing' });
   try {
     const pts = [start, ...routeWaypoints, end];
     const result = await route(pts);
+    if (seq !== routeSeq) return; // superseded while in flight
     if (draftPolyline) { draftPolyline.remove(); draftPolyline = null; }
     draftPolyline = L.polyline(result.points.map(p => [p.lat, p.lon]), {
       color: '#e8a020', weight: 5, opacity: 0.95, lineJoin: 'round', lineCap: 'round', dashArray: '10,5'
@@ -183,6 +187,7 @@ async function tryRouting() {
     draftPoints = result.points;
     notifyDraft({ status: 'ready', km: result.km, minutes: result.minutes, points: draftPoints.slice() });
   } catch (e) {
+    if (seq !== routeSeq) return;
     notifyDraft({ status: 'error', message: e?.message || 'Routing failed' });
   }
 }
@@ -251,21 +256,8 @@ export function selectRoad(id) {
 
 // ── HOME MARKER ──────────────────────────────────────────────────────────────
 let homeMarker = null;
-let homeChangeListener = null; // () => void, see onHomeChange()
 
-/**
- * Register a listener invoked (no args) after the home-marker drag's self-wired
- * setHome() call settles, on both success and failure — mirrors onRoadSelect's
- * seam, giving app.js a hook to refresh the visible view/labels since this
- * internal call bypasses app.js's own .then/.catch UI wiring.
- */
-export function onHomeChange(cb) { homeChangeListener = cb; }
-
-/**
- * (Re)draws the draggable home marker. onDragEnd(lat,lon), if given, fires on drag —
- * app.js/setHome wires this to persist the new position (see setHome below, which
- * self-wires this so dragging Home recomputes + saves automatically).
- */
+/** (Re)draws the draggable home marker. onDragEnd(lat, lon) fires when it's dropped. */
 export function renderHomeMarker(home, onDragEnd) {
   if (homeMarker) { homeMarker.remove(); homeMarker = null; }
   if (!home) return null;
@@ -275,121 +267,105 @@ export function renderHomeMarker(home, onDragEnd) {
       html: `<div style="width:22px;height:22px;border-radius:50%;background:var(--blue);border:2px solid #fff;display:flex;align-items:center;justify-content:center;font-family:'Space Mono',monospace;font-size:12px;font-weight:700;color:#000;box-shadow:0 2px 6px rgba(0,0,0,.5)">⌂</div>`,
       iconSize: [22, 22], iconAnchor: [11, 11]
     }),
-    draggable: true, zIndexOffset: 2000
+    draggable: !!onDragEnd, zIndexOffset: 2000
   }).addTo(map);
-  homeMarker.on('dragend', e => {
-    const p = e.target.getLatLng();
-    if (onDragEnd) onDragEnd(p.lat, p.lng);
-  });
+  if (onDragEnd) {
+    homeMarker.on('dragend', e => {
+      const p = e.target.getLatLng();
+      onDragEnd(p.lat, p.lng);
+    });
+  }
   return homeMarker;
 }
 
 // ── PERSISTENCE: SAVE / EDIT / RENAME / DELETE ──────────────────────────────
+// Each function describes its change to a COPY of the library; repo.commit()
+// writes the copy and only adopts it once GitHub has accepted it.
+
+function findRoad(data, id) {
+  const road = data.roads.find(r => r.id === id);
+  if (!road) throw new Error('Road not found — it may have been deleted');
+  return road;
+}
 
 /**
- * Builds a normalized v2 road from the given draft points, pushes it into
- * appState.data.roads, computes its drive-time-from-home (if home is set),
- * writes to GitHub, re-renders saved roads, and selects the new road.
- * Returns the saved road.
+ * Saves a new road built from `points`, with its drive-time from home (if home
+ * is set), then re-renders and selects it. Returns the saved road.
  */
 export async function saveRoad(name, points, appState) {
   if (!points || points.length < 2) throw new Error('Route needs at least 2 points');
-  assertOnline();
+  assertWritable(appState);
   const road = normalizeRoad({
     id: Date.now(),
     name: (name || '').trim() || 'Unnamed road',
     points: points.map(p => ({ lat: p.lat, lon: p.lon })),
-    created: new Date().toISOString().slice(0, 10)
+    created: localDate()
   });
-  appState.data.roads.push(road);
-  if (appState.data.home) {
-    await recomputeDriveTime(road, appState.data.home, appState);
-  }
-  await writeRoads(getCfg(appState), appState.data);
+  const home = appState.data.home;
+  if (home) road.driveTimeFromHome = await driveTimeFrom(home, road.points);
+  await appState.repo.commit(appState.auth, next => { next.roads.push(road); });
   resetRouteUI();
   renderSavedRoads(appState);
   selectRoad(road.id);
   return road;
 }
 
-/** Shallow-merges `patch` into road.meta, writes, re-renders. Returns the road or null if not found. */
+/** Shallow-merges `patch` into the road's meta. */
 export async function editMeta(id, patch, appState) {
-  const road = appState.data.roads.find(r => r.id === id);
-  if (!road) return null;
-  assertOnline();
-  road.meta = { ...road.meta, ...patch };
-  await writeRoads(getCfg(appState), appState.data);
+  await appState.repo.commit(appState.auth, next => {
+    const road = findRoad(next, id);
+    road.meta = { ...road.meta, ...patch };
+  });
   renderSavedRoads(appState);
-  return road;
 }
 
-/** Renames a road (ignored if name is blank after trim). Returns the road or null if not found. */
+/** Renames a road; a blank name is ignored (nothing is written). */
 export async function renameRoad(id, name, appState) {
-  const road = appState.data.roads.find(r => r.id === id);
-  if (!road) return null;
-  assertOnline();
   const trimmed = (name || '').trim();
-  if (trimmed) road.name = trimmed;
-  await writeRoads(getCfg(appState), appState.data);
+  if (!trimmed) return;
+  await appState.repo.commit(appState.auth, next => { findRoad(next, id).name = trimmed; });
   renderSavedRoads(appState);
-  return road;
 }
 
-/** Removes a road from appState.data.roads, writes, re-renders. Returns true if a road was removed. */
 export async function deleteRoad(id, appState) {
-  const idx = appState.data.roads.findIndex(r => r.id === id);
-  if (idx < 0) return false;
-  assertOnline();
-  appState.data.roads.splice(idx, 1);
+  await appState.repo.commit(appState.auth, next => {
+    next.roads.splice(next.roads.indexOf(findRoad(next, id)), 1);
+  });
   if (selectedRoadId === id) {
     selectedRoadId = null;
     if (selectListener) selectListener(null);
   }
-  await writeRoads(getCfg(appState), appState.data);
   renderSavedRoads(appState);
-  return true;
 }
 
-// ── DRIVE-TIME-FROM-HOME CACHE ───────────────────────────────────────────────
-export async function recomputeDriveTime(road, home, appState) {
-  if (!home) { road.driveTimeFromHome = null; return; }
-  const { point } = nearestPoint(home.lat, home.lon, road.points);
+// ── DRIVE-TIME FROM HOME ─────────────────────────────────────────────────────
+// Road distance home → the road's nearest point; air distance when OSRM is down.
+async function driveTimeFrom(home, points) {
+  const { point } = nearestPoint(home.lat, home.lon, points);
   try {
     const r = await route([home, point]);
-    road.driveTimeFromHome = { minutes: r.minutes, km: r.km, computedForHome: { ...home } };
+    return { minutes: r.minutes, km: r.km, computedForHome: { ...home } };
   } catch {
     const air = airFallback(home.lat, home.lon, point.lat, point.lon);
-    road.driveTimeFromHome = { minutes: null, km: air.km, computedForHome: { ...home }, approx: true };
+    return { minutes: null, km: air.km, computedForHome: { ...home }, approx: true };
   }
 }
 
 /**
- * Sets appState.data.home, recomputes drive-time for every saved road, writes to
- * GitHub, and (re)draws the draggable home marker (which self-wires further drags
- * back into setHome). Returns the new home point.
+ * Moves home and recomputes every road's distance from it. The OSRM calls run
+ * first (one at a time — it's a shared public server); the library only
+ * changes once the whole result has been saved. Returns the new home.
  */
 export async function setHome(lat, lon, appState) {
-  assertOnline();
+  assertWritable(appState);
   const home = { lat, lon };
-  appState.data.home = home;
+  const times = new Map();
   for (const road of appState.data.roads) {
-    await recomputeDriveTime(road, home, appState);
+    if (road.points?.length) times.set(road.id, await driveTimeFrom(home, road.points));
   }
-  await writeRoads(getCfg(appState), appState.data);
-  renderHomeMarker(home, (dragLat, dragLon) => {
-    // Self-rewired drag handler (see doc comment on renderHomeMarker) — this call
-    // bypasses app.js's UI-level guard/catch, so mirror the same alert style here
-    // to keep dragging Home just as safe as the app.js-driven write paths. Also
-    // notify onHomeChange listeners on both outcomes: setHome mutates
-    // appState.data.home + every road's driveTimeFromHome before the awaited
-    // writeRoads that can fail, so a failed write leaves the view stale without
-    // this refresh hook (success needs the same refresh for consistency).
-    setHome(dragLat, dragLon, appState)
-      .then(() => { if (homeChangeListener) homeChangeListener(); })
-      .catch(err => {
-        alert('Set home failed — NOT saved: ' + (err?.message || err));
-        if (homeChangeListener) homeChangeListener();
-      });
+  await appState.repo.commit(appState.auth, next => {
+    next.home = home;
+    for (const road of next.roads) if (times.has(road.id)) road.driveTimeFromHome = times.get(road.id);
   });
   renderSavedRoads(appState);
   return home;

@@ -36,8 +36,11 @@ export function locate() {
   });
 }
 
+// Roads with no geometry sort last instead of throwing.
 export function sortByProximity(roads, lat, lon) {
-  const mid = r => r.points[Math.floor(r.points.length / 2)];
-  return roads.slice().sort((a, b) =>
-    haversineKm(lat, lon, mid(a).lat, mid(a).lon) - haversineKm(lat, lon, mid(b).lat, mid(b).lon));
+  const dist = r => {
+    const m = r.points?.[Math.floor((r.points?.length || 0) / 2)];
+    return m ? haversineKm(lat, lon, m.lat, m.lon) : Infinity;
+  };
+  return roads.map(r => [dist(r), r]).sort((a, b) => a[0] - b[0]).map(x => x[1]);
 }

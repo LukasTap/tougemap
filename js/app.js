@@ -3,31 +3,34 @@
 // Library / Tonight / Discover-or-Near-me views plus the desktop-only
 // planner (draw/save/edit/home) and Discover curvature UI.
 
-import { initMap, setLayer, locate, sortByProximity, map, savedGroup, discoverGroup } from './map.js';
-import { loadAuth, saveToken, savePassphrase, readRoads, writeRoads } from './sync.js';
+import { initMap, setLayer, locate, sortByProximity, map, discoverGroup } from './map.js';
+import { loadAuth, saveToken, savePassphrase, forgetDevice } from './sync.js';
+import { createRepo } from './repo.js';
+import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
 import {
   createWeatherClient, wmoDesc, nightHours, nightGroups, nightExtremes, decisionHours,
-  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, DRIVE_FROM, DRIVE_TO,
+  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W,
   scrubPoints, nearestScrubPoint
 } from './weather.js';
 import { rankRoads, reachable } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
 import {
   onDraftUpdate, getDraftState, startPlacing, handleMapClick, clearRoutePoint,
-  addWaypoint, removeWaypoint, clearWaypoints, saveRoad, editMeta, renameRoad,
-  deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker,
-  onHomeChange
+  removeWaypoint, clearWaypoints, saveRoad, editMeta, renameRoad,
+  deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker
 } from './planner.js';
 import { nearestPoint, route } from './routing.js';
 import { buildOverpassQuery, fetchOverpass, joinAndScore, curvColor, fogColor } from './curvature.js';
 import {
-  isDesktop, showView, showInspector, hideInspector, openSheet, closeSheet,
-  openNameModal, showUnlock, showSettings, hideOnboarding, setDiscoverStatus, initUi
+  isDesktop, showView, showInspector, hideInspector, openSheet,
+  openNameModal, showUnlock, showSettings, hideOnboarding, setDiscoverStatus, setStatusBanner, initUi
 } from './ui.js';
 
+const repo = createRepo();
 export const appState = {
-  data: { version: 2, home: null, roads: [] },
-  auth: loadAuth(),      // { token, passphrase } — token=write, passphrase=decrypt
+  repo,
+  get data() { return repo.data; }, // read-only view; change it via repo.commit()
+  auth: loadAuth(),                 // { token, passphrase } — token=write, passphrase=decrypt
   weatherClient: createWeatherClient(),
   now: () => new Date()
 };
@@ -36,55 +39,35 @@ let currentView = 'library';
 const VIEW_NAMES = { library: 'Library', tonight: 'Tonight', nearme: 'Near Me', discover: 'Discover' };
 let placingHome = false;
 
-// ── DISCOVER IN-MEMORY + INDEXEDDB CACHE (separate DB from store.js's roads
-// cache — keeps this module self-contained, no changes to store.js needed) ──
-const DISCOVER_DB = 'tougemap-discover-cache';
-const DISCOVER_STORE = 'regions';
+// ── DISCOVER CACHE (IndexedDB, 24 h) ────────────────────────────────────────
 const DISCOVER_TTL_MS = 24 * 60 * 60 * 1000;
-
-function openDiscoverDb() {
-  return new Promise((res, rej) => {
-    const req = indexedDB.open(DISCOVER_DB, 1);
-    req.onupgradeneeded = () => req.result.createObjectStore(DISCOVER_STORE);
-    req.onsuccess = () => res(req.result);
-    req.onerror = () => rej(req.error);
-  });
-}
 async function discoverCacheRead(key) {
-  try {
-    const db = await openDiscoverDb();
-    const hit = await new Promise((res) => {
-      const r = db.transaction(DISCOVER_STORE).objectStore(DISCOVER_STORE).get(key);
-      r.onsuccess = () => res(r.result ?? null);
-      r.onerror = () => res(null);
-    });
-    if (hit && (Date.now() - hit.ts) < DISCOVER_TTL_MS) return hit.collections;
-    return null;
-  } catch { return null; }
+  const hit = await idbGet(DISCOVER_DB, DISCOVER_STORE, key);
+  return hit && (Date.now() - hit.ts) < DISCOVER_TTL_MS ? hit.collections : null;
 }
-async function discoverCacheWrite(key, collections) {
-  try {
-    const db = await openDiscoverDb();
-    await new Promise((res, rej) => {
-      const tx = db.transaction(DISCOVER_STORE, 'readwrite');
-      tx.objectStore(DISCOVER_STORE).put({ ts: Date.now(), collections }, key);
-      tx.oncomplete = res; tx.onerror = () => rej(tx.error);
-    });
-  } catch { /* best-effort */ }
-}
+const discoverCacheWrite = (key, collections) =>
+  idbPut(DISCOVER_DB, DISCOVER_STORE, key, { ts: Date.now(), collections });
 
 // ── HELPERS ──────────────────────────────────────────────────────────────────
 function midpoint(road) { return road.points[Math.floor(road.points.length / 2)]; }
 
-// ── OFFLINE-WRITE GUARD (spec §3.3) ──────────────────────────────────────────
-// planner.js's mutators already refuse to run while offline (belt-and-braces —
-// covers the self-rewired home-drag handler too), but checking here first means
-// the user gets the clear message immediately instead of via a rejected promise.
-function isOffline() { return typeof navigator !== 'undefined' && navigator.onLine === false; }
-function offlineGuardAlert() {
-  if (isOffline()) { alert("You're offline — changes can't be saved right now"); return true; }
+// ── WRITE GUARD ──────────────────────────────────────────────────────────────
+// The repo refuses writes when they can't succeed (offline, no token, library
+// not loaded from GitHub). Checking up front gives the reason immediately.
+function writeBlockedAlert() {
+  const block = repo.writeBlock(appState.auth);
+  if (block) { alert(block); return true; }
   return false;
 }
+const failAlert = (what) => (err) => { alert(`${what} — ${err?.message || err}`); refreshCurrentView(); };
+
+// ── STALE-RENDER GUARD ───────────────────────────────────────────────────────
+// Tonight and Near-me await forecasts / GPS (seconds). On a phone every view and
+// the road inspector share one container (the bottom sheet), so a late result
+// must not overwrite whatever was opened in the meantime. Any navigation bumps
+// this; an async render only writes if it is still the latest.
+let renderSeq = 0;
+const isCurrent = (seq) => seq === renderSeq;
 
 function zoomToPoints(points) {
   if (!points?.length) return;
@@ -107,10 +90,11 @@ function switchView(name) {
 }
 
 function renderView(name, container) {
-  if (name === 'library') renderLibrary(container);
-  else if (name === 'tonight') renderTonight(container);
+  const seq = ++renderSeq;
+  if (name === 'library') renderLibrary(container, seq);
+  else if (name === 'tonight') renderTonight(container, seq);
   else if (name === 'discover') renderDiscoverList(container);
-  else if (name === 'nearme') renderNearMe(container);
+  else if (name === 'nearme') renderNearMe(container, seq);
 }
 
 function wireCardClicks(container, roads) {
@@ -130,14 +114,18 @@ function updateRoadCount() {
   if (el) el.textContent = `${appState.data.roads.length} saved`;
 }
 
-function renderLibrary(container) {
+function renderLibrary(container, seq) {
   if (!container) return;
   updateRoadCount();
   const q = document.getElementById('library-search')?.value || '';
   const sortKey = document.getElementById('library-sort')?.value || 'name';
   const roads = sortRoads(filterRoads(appState.data.roads, { q }), sortKey);
   if (!roads.length) {
-    container.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:12px 0">No roads saved yet.<br>Draw a road on the map and save it.</div>';
+    container.innerHTML = appState.data.roads.length
+      ? '<div style="font-size:11px;color:var(--text3);padding:12px 0">No roads match the search.</div>'
+      : `<div style="font-size:11px;color:var(--text3);padding:12px 0">${repo.source === 'remote' || repo.source === 'fixture'
+          ? 'No roads saved yet.<br>Draw a road on the map and save it.'
+          : 'Roads couldn’t be loaded — see the notice at the top of the map.'}</div>`;
     return;
   }
   container.innerHTML = roads.map(r => roadCardHtml(r)).join('');
@@ -147,6 +135,7 @@ function renderLibrary(container) {
     const mid = midpoint(r);
     if (!mid) continue;
     appState.weatherClient.get(mid.lat, mid.lon).then(fc => {
+      if (!isCurrent(seq)) return;
       const metaEl = container.querySelector(`.road-lib-item[data-id="${r.id}"] .road-lib-meta`);
       if (!metaEl || metaEl.parentElement.querySelector('.fog-strip')) return;
       metaEl.insertAdjacentHTML('afterend', fogStripHtml(tonightRisks(fc, appState.now())));
@@ -155,9 +144,41 @@ function renderLibrary(container) {
 }
 
 // ── TONIGHT VIEW ─────────────────────────────────────────────────────────────
-async function renderTonight(container) {
+// The controls render inside the view (not the desktop sidebar), so the phone
+// gets refresh and "within N km" too. The choice is remembered per device.
+const TONIGHT_OPTS_KEY = 'tougemap_tonight';
+const tonightOpts = (() => {
+  try { return { reach: false, km: 100, ...JSON.parse(localStorage.getItem(TONIGHT_OPTS_KEY) || '{}') }; }
+  catch { return { reach: false, km: 100 }; }
+})();
+function saveTonightOpts() {
+  try { localStorage.setItem(TONIGHT_OPTS_KEY, JSON.stringify(tonightOpts)); } catch { /* per-device nicety */ }
+}
+
+function tonightBarHtml() {
+  return `<div class="tonight-bar">
+      <label class="tonight-within"><input type="checkbox" data-t="reach" ${tonightOpts.reach ? 'checked' : ''}> Within
+        <input type="number" data-t="km" value="${tonightOpts.km}" min="10" step="10" inputmode="numeric"> km of home</label>
+      <span class="tonight-stamp" data-t="stamp">Loading…</span>
+      <button class="pt-btn" data-t="refresh" title="Fetch fresh forecasts">↻ Refresh</button>
+    </div>
+    <div data-t="results"><div class="weather-loading">Loading forecasts…</div></div>`;
+}
+
+function wireTonightBar(container) {
+  const q = (k) => container.querySelector(`[data-t="${k}"]`);
+  q('reach')?.addEventListener('change', (e) => { tonightOpts.reach = e.target.checked; saveTonightOpts(); refreshCurrentView(); });
+  q('km')?.addEventListener('change', (e) => {
+    tonightOpts.km = Math.max(10, Number(e.target.value) || 100); saveTonightOpts(); refreshCurrentView();
+  });
+  q('refresh')?.addEventListener('click', () => { appState.weatherClient.clear(); refreshCurrentView(); });
+}
+
+async function renderTonight(container, seq) {
   if (!container) return;
-  container.innerHTML = '<div class="weather-loading">Loading forecasts…</div>';
+  container.innerHTML = tonightBarHtml();
+  wireTonightBar(container);
+  const results = container.querySelector('[data-t="results"]');
   const roads = appState.data.roads;
   const entries = await Promise.all(roads.map(async road => {
     const mid = midpoint(road);
@@ -165,44 +186,47 @@ async function renderTonight(container) {
     try { return { road, forecast: await appState.weatherClient.get(mid.lat, mid.lon) }; }
     catch { return { road, forecast: null }; }
   }));
+  if (!isCurrent(seq)) return; // the user moved on while forecasts loaded
   let ranked = rankRoads(entries, appState.now());
-  const reachableOn = document.getElementById('tonight-reachable-toggle')?.checked;
-  const maxKm = Number(document.getElementById('tonight-reachable-km')?.value) || 100;
-  if (reachableOn) ranked = ranked.filter(r => reachable(r, maxKm));
+  if (tonightOpts.reach) ranked = ranked.filter(r => reachable(r, tonightOpts.km));
 
   if (!ranked.length) {
-    container.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:12px 0">No roads match.</div>';
+    results.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:12px 0">${roads.length ? 'No roads within that distance.' : 'No roads saved yet.'}</div>`;
   } else {
-    container.innerHTML = ranked.map(road => {
-      const entry = entries.find(e => e.road.id === road.id);
+    const byId = new Map(entries.map(e => [e.road.id, e]));
+    results.innerHTML = ranked.map(road => {
+      const entry = byId.get(road.id);
       const risks = entry?.forecast ? tonightRisks(entry.forecast, appState.now()) : null;
-      return `<div class="road-lib-item" data-id="${road.id}">
+      const dist = road.driveTimeFromHome?.km != null ? `<span>${road.driveTimeFromHome.km} km away</span>` : '';
+      return `<div class="road-lib-item" data-id="${escapeHtml(road.id)}">
         ${thumbnailSvg(road.points)}
         <div class="road-lib-name">${escapeHtml(road.name)}</div>
-        <div class="road-lib-meta"><span>${road.km} km</span></div>
+        <div class="road-lib-meta"><span>${escapeHtml(road.km)} km</span>${dist}</div>
         ${fogStripHtml(risks)}
         <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
       </div>`;
     }).join('');
-    wireCardClicks(container, ranked);
+    wireCardClicks(results, ranked);
   }
-  const stamp = document.getElementById('tonight-updated');
+  const stamp = container.querySelector('[data-t="stamp"]');
   if (stamp) stamp.textContent = 'Updated ' + appState.now().toTimeString().slice(0, 5);
 }
 
 // ── NEAR ME VIEW (mobile only) ───────────────────────────────────────────────
-async function renderNearMe(container) {
+async function renderNearMe(container, seq) {
   if (!container) return;
   container.innerHTML = '<div class="weather-loading">Getting your location…</div>';
   try {
     const { lat, lon } = await locate();
+    if (!isCurrent(seq)) return;
     const sorted = sortByProximity(appState.data.roads, lat, lon);
     container.innerHTML = sorted.length
       ? sorted.map(r => roadCardHtml(r)).join('')
       : '<div style="font-size:11px;color:var(--text3);padding:12px 0">No roads saved yet.</div>';
     wireCardClicks(container, sorted);
   } catch (e) {
-    container.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:12px 0">Location unavailable: ${e?.message || e}</div>`;
+    if (!isCurrent(seq)) return;
+    container.innerHTML = `<div style="font-size:11px;color:var(--text3);padding:12px 0">Location unavailable: ${escapeHtml(e?.message || e)}</div>`;
   }
 }
 
@@ -512,29 +536,29 @@ function wireInspectorEdit(road) {
     openNameModal({
       title: 'Rename road', value: road.name,
       onSave: (name) => {
-        if (offlineGuardAlert()) return;
-        renameRoad(road.id, name, appState).then(refreshCurrentView)
-          .catch(err => { alert('Rename failed — NOT saved: ' + (err?.message || err)); refreshCurrentView(); });
+        if (writeBlockedAlert()) return;
+        renameRoad(road.id, name, appState).then(refreshCurrentView).catch(failAlert('Rename failed'));
       }
     });
   });
   document.getElementById('insp-delete-btn')?.addEventListener('click', () => {
-    if (confirm(`Delete "${road.name}"? This cannot be undone.`)) {
-      if (offlineGuardAlert()) return;
-      deleteRoad(road.id, appState).then(() => { hideInspector(); refreshCurrentView(); })
-        .catch(err => { alert('Delete failed — NOT saved: ' + (err?.message || err)); refreshCurrentView(); });
+    if (writeBlockedAlert()) return;
+    if (confirm(`Delete "${road.name}"? (It stays recoverable from the repo's git history.)`)) {
+      deleteRoad(road.id, appState).then(() => { hideInspector(); refreshCurrentView(); }).catch(failAlert('Delete failed'));
     }
   });
   document.getElementById('insp-save-meta-btn')?.addEventListener('click', () => {
-    if (offlineGuardAlert()) return;
+    if (writeBlockedAlert()) return;
+    const btn = document.getElementById('insp-save-meta-btn');
     const patch = {
       pavement: document.getElementById('insp-pavement').value || null,
       character: document.getElementById('insp-character').value || null,
       deer: document.getElementById('insp-deer').value || null,
       notes: document.getElementById('insp-notes').value
     };
-    editMeta(road.id, patch, appState).then(refreshCurrentView)
-      .catch(err => { alert('Save failed — NOT saved: ' + (err?.message || err)); refreshCurrentView(); });
+    if (btn) { btn.disabled = true; btn.textContent = 'SAVING…'; }
+    editMeta(road.id, patch, appState).then(refreshCurrentView).catch(failAlert('Save failed'))
+      .finally(() => { if (btn?.isConnected) { btn.disabled = false; btn.textContent = 'SAVE META'; } });
   });
 }
 
@@ -561,6 +585,7 @@ async function showHomeLine(road) {
 
 function wireRoadSelection() {
   onRoadSelect((road) => {
+    renderSeq++; // the inspector now owns the panel/sheet — drop pending list renders
     if (!road) { hideInspector(); clearHomeLine(); return; }
     const editable = isDesktop() && !!appState.auth.token; // editor = writer with a token
     const html = roadInspectorHtml(road, editable);
@@ -594,14 +619,15 @@ function updateDraftUi() {
       btn.addEventListener('click', () => removeWaypoint(Number(btn.dataset.idx))));
   }
   const saveBtn = document.getElementById('save-road-btn');
-  if (saveBtn) saveBtn.disabled = !s.ready || isOffline();
+  if (saveBtn) saveBtn.disabled = !s.ready || !!repo.writeBlock(appState.auth);
 }
 
 let lastDraftStatus = { status: 'idle' };
 function applyPlannerHint() {
   const hintText = document.getElementById('planner-hint-text');
   if (!hintText) return;
-  if (isOffline()) { hintText.textContent = "You're offline — changes can't be saved right now"; return; }
+  const block = repo.writeBlock(appState.auth);
+  if (block) { hintText.textContent = block; return; }
   const msgs = { idle: 'Place Start and End to route', routing: 'Routing…', ready: 'Ready to save', error: lastDraftStatus.message || 'Routing failed' };
   hintText.textContent = msgs[lastDraftStatus.status] || '';
 }
@@ -624,10 +650,10 @@ function wirePlannerUi() {
     openNameModal({
       title: 'Name this road', value: '',
       onSave: (name) => {
-        if (offlineGuardAlert()) return;
+        if (writeBlockedAlert()) return;
         saveRoad(name, s.points, appState).then(() => {
           if (currentView === 'library') refreshCurrentView();
-        }).catch(err => alert(err.message || 'Could not save road'));
+        }).catch(failAlert('Could not save road'));
       }
     });
   });
@@ -650,6 +676,24 @@ function wirePlannerUi() {
 function updateHomeLabel(home) {
   const el = document.getElementById('home-coords');
   if (el) el.textContent = home ? `${home.lat.toFixed(4)}, ${home.lon.toFixed(4)}` : 'Not set';
+}
+
+// Home marker + label always mirror the SAVED home: after a failed save (or a
+// drag that was refused), the marker snaps back to where home really is.
+function renderHome() {
+  const home = appState.data.home;
+  const canEdit = isDesktop() && !!appState.auth.token && repo.source === 'remote';
+  renderHomeMarker(home, canEdit ? (lat, lon) => applyHome(lat, lon) : null);
+  updateHomeLabel(home);
+}
+
+function applyHome(lat, lon) {
+  if (writeBlockedAlert()) { renderHome(); return; }
+  const label = document.getElementById('home-coords');
+  if (label) label.textContent = 'Saving…';
+  setHome(lat, lon, appState)
+    .then(() => { renderHome(); refreshCurrentView(); })
+    .catch(err => { renderHome(); failAlert('Set home failed')(err); });
 }
 
 // ── DESKTOP-ONLY: DISCOVER (curvature) ──────────────────────────────────────
@@ -687,10 +731,12 @@ function renderDiscoverList(container) {
     container.innerHTML = '<div style="font-size:11px;color:var(--text3);padding:12px 0">No results yet — pick a region and load.</div>';
     return;
   }
+  // Names, refs and highway tags come straight from OpenStreetMap — third-party
+  // text, escaped like everything else that goes into innerHTML.
   container.innerHTML = discoverCollections.map((c, idx) => `
     <div class="road-lib-item" data-idx="${idx}">
-      <div class="road-lib-name">${c.name || c.ref || 'Unnamed'} <span style="color:var(--text3);font-weight:400">(${c.highway || '?'})</span></div>
-      <div class="road-lib-meta"><span>${c.length.toFixed(1)} km</span><span>curv ${c.curvature}</span><span>${c.surfaceClass}</span></div>
+      <div class="road-lib-name">${escapeHtml(c.name || c.ref || 'Unnamed')} <span style="color:var(--text3);font-weight:400">(${escapeHtml(c.highway || '?')})</span></div>
+      <div class="road-lib-meta"><span>${c.length.toFixed(1)} km</span><span>curv ${c.curvature}</span><span>${escapeHtml(c.surfaceClass)}</span></div>
       <div class="road-lib-actions"><button class="road-lib-btn save-discover-btn" data-idx="${idx}">SAVE</button></div>
     </div>`).join('');
 
@@ -710,11 +756,11 @@ function renderDiscoverList(container) {
       openNameModal({
         title: 'Save discovered road', value: c.name || c.ref || 'Discovered road',
         onSave: (name) => {
-          if (offlineGuardAlert()) return;
+          if (writeBlockedAlert()) return;
           const points = c.coords.map(([lat, lon]) => ({ lat, lon }));
           saveRoad(name, points, appState).then(() => {
             if (currentView === 'library') refreshCurrentView();
-          }).catch(err => alert(err.message || 'Could not save road'));
+          }).catch(failAlert('Could not save road'));
         }
       });
     });
@@ -781,9 +827,7 @@ function wireMapClick() {
     if (placingHome) {
       placingHome = false;
       map.getContainer().style.cursor = '';
-      if (offlineGuardAlert()) return;
-      setHome(e.latlng.lat, e.latlng.lng, appState).then(updateHomeLabel)
-        .catch(err => { alert('Set home failed — NOT saved: ' + (err?.message || err)); refreshCurrentView(); });
+      applyHome(e.latlng.lat, e.latlng.lng);
       return;
     }
     handleMapClick(e.latlng.lat, e.latlng.lng);
@@ -800,7 +844,6 @@ function wireChrome() {
   wireLayerToggle();
   wireMapClick();
   wireRoadSelection();
-  onHomeChange(() => refreshCurrentView());
 
   const desktop = isDesktop();
   document.getElementById('planner-tools').style.display = desktop ? 'block' : 'none';
@@ -810,31 +853,35 @@ function wireChrome() {
   document.getElementById('settings-btn')?.addEventListener('click', () => openSettings());
   document.getElementById('library-search')?.addEventListener('input', () => { if (currentView === 'library') refreshCurrentView(); });
   document.getElementById('library-sort')?.addEventListener('change', () => { if (currentView === 'library') refreshCurrentView(); });
-  document.getElementById('tonight-refresh')?.addEventListener('click', () => { appState.weatherClient.clear(); if (currentView === 'tonight') refreshCurrentView(); });
-  document.getElementById('tonight-reachable-toggle')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
-  document.getElementById('tonight-reachable-km')?.addEventListener('change', () => { if (currentView === 'tonight') refreshCurrentView(); });
+}
+
+// What the banner over the map says about where the data came from. Silent when
+// everything is normal; otherwise it explains why saving is off.
+function updateStatusBanner() {
+  const when = (e) => (e?.message ? ` (${e.message})` : '');
+  if (repo.source === 'fixture') setStatusBanner('Sample data (dev fixture) — saving is off', 'info');
+  else if (repo.source === 'cache') setStatusBanner(`Offline copy — couldn’t reach GitHub${when(repo.error)}. Viewing only; saving is off until a reload succeeds.`, 'warn');
+  else if (repo.source === 'none') setStatusBanner(`Couldn’t load roads from GitHub${when(repo.error)} and there’s no offline copy on this device. Saving is off — reload to retry.`, 'error');
+  else if (repo.notice) setStatusBanner(repo.notice, 'warn');
+  else setStatusBanner(null);
 }
 
 // Read roads (decrypting if needed) and render. Returns true on success; on a
 // lock error it shows the unlock screen and returns false.
 async function loadAndRender() {
   try {
-    appState.data = await readRoads(appState.auth);
+    await repo.load(appState.auth);
   } catch (e) {
     if (e.code === 'BAD_PASSPHRASE') { promptUnlock('Wrong passphrase — try again'); return false; }
     if (e.code === 'ENCRYPTED_NO_PASS') { promptUnlock(); return false; }
-    appState.data = { version: 2, home: null, roads: [] }; // unknown error → empty, let them proceed
+    throw e;
   }
   hideOnboarding();
+  updateStatusBanner();
   renderSavedRoads(appState);
-  if (appState.data.home) {
-    renderHomeMarker(appState.data.home, (lat, lon) => {
-      if (offlineGuardAlert()) return;
-      setHome(lat, lon, appState).then(updateHomeLabel)
-        .catch(err => { alert('Set home failed — NOT saved: ' + (err?.message || err)); refreshCurrentView(); });
-    });
-    updateHomeLabel(appState.data.home);
-  }
+  renderHome();
+  updateDraftUi();
+  applyPlannerHint();
   switchView('library');
   return true;
 }
@@ -855,25 +902,40 @@ function promptUnlock(message) {
 
 // SETTINGS (🔑): set the write token and/or set/change the passphrase. Setting a
 // passphrase (confirmed) is the ONLY way roads get encrypted — an explicit,
-// deliberate action, never a silent side effect of unlocking. Changing it
-// re-encrypts the in-memory (already-decrypted) data with the new passphrase.
+// deliberate action, never a silent side effect of unlocking.
+//
+// With a token, a new passphrase only takes effect on this device once the
+// library has been re-encrypted with it AND saved; if that save fails, nothing
+// changes here, so this device and the repo can't end up on different
+// passphrases. Without a token it just replaces the key this device unlocks with.
 function openSettings() {
   showSettings({
     hasToken: !!appState.auth.token,
     hasPassphrase: !!appState.auth.passphrase,
     onCancel: () => {},
+    onForget: async () => {
+      if (!confirm('Forget this device? This removes the passphrase, the GitHub token and the offline copy of your roads from this browser.')) return;
+      await forgetDevice();
+      location.reload();
+    },
     onSubmit: async ({ passphrase, token }) => {
       if (token) { appState.auth = { ...appState.auth, token }; saveToken(token); }
-      const changingPass = !!passphrase;
-      if (changingPass) { appState.auth = { ...appState.auth, passphrase }; savePassphrase(passphrase); }
-      hideOnboarding();
-      // If a passphrase was set/changed and we can write, (re)encrypt now so the
-      // repo reflects it immediately — with confirmation already done, no surprise.
-      if (changingPass && appState.auth.token) {
-        try { await writeRoads(appState.auth, appState.data); }
-        catch (err) { alert('Could not save encrypted roads: ' + (err?.message || err)); }
+      if (passphrase && appState.auth.token) {
+        const nextAuth = { ...appState.auth, passphrase };
+        const block = repo.writeBlock(nextAuth);
+        if (block) throw new Error(block);
+        await repo.commit(nextAuth, () => {}); // same data, re-encrypted with the new passphrase
+        appState.auth = nextAuth;
+        savePassphrase(passphrase);
+      } else if (passphrase) {
+        appState.auth = { ...appState.auth, passphrase };
+        savePassphrase(passphrase);
+        await loadAndRender();
+        return;
       }
-      refreshCurrentView();
+      hideOnboarding();
+      if (token) await loadAndRender(); // a token changes how the file is read (API vs raw)
+      else refreshCurrentView();
     }
   });
 }
@@ -882,7 +944,11 @@ async function boot() {
   initUi();
   if (!map) initMap('map');
   wireChrome();
-  await loadAndRender(); // plaintext loads with no prompt; encrypted+locked shows unlock
+  try {
+    await loadAndRender(); // plaintext loads with no prompt; encrypted+locked shows unlock
+  } catch (e) {
+    setStatusBanner(`Something went wrong loading the app: ${e?.message || e}`, 'error');
+  }
 }
 
 boot();

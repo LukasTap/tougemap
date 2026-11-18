@@ -92,18 +92,9 @@ export function nightExtremes(hours) {
   };
 }
 
-// Fog score for ranking: the worst hour of the stretch actually DRIVEN tonight.
-//
-// Named for its scope on purpose. The old calcFogScore took the worst hour of
-// the whole night, which buried a road that is clear 22:00–02:00 and soup at
-// dawn beneath one that is mediocre throughout — and an ambiguous name is what
-// let the original scoring bug hide: it used a second, unrelated formula over a
-// window truncated at array index 24, so it disagreed with the per-hour figures
-// and, checked during the day, missed 01:00–06:00 entirely.
-export function driveFogScore(d, now) {
-  const hours = decisionHours(firstNightHours(d, now));
-  return hours.reduce((max, h) => Math.max(max, h.risk), 0);
-}
+// (Ranking's fog figure is the worst hour of decisionHours() — see
+// tonight-rank.js. The old calcFogScore used a second formula over a window cut
+// off at array index 24, which, checked in the afternoon, missed 01:00–06:00.)
 
 // fogBadge() lived here and turned the night's worst hour into one word. It is
 // gone: a word cannot distinguish a night fogged end to end from one that is

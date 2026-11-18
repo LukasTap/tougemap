@@ -320,3 +320,19 @@ path.leaflet-interactive:focus{outline:none !important}
 /* onboarding */
 #onboard{position:fixed;inset:0;background:var(--bg);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px}
 #onboard .box{max-width:420px;width:100%;background:var(--surface);border:1px solid var(--border2);border-radius:8px;padding:24px}
+/* ── status banner: why the app is read-only (offline copy, load failure, token) ── */
+#status-banner{display:none;position:absolute;top:12px;left:50%;transform:translateX(-50%);z-index:1000;max-width:min(560px,calc(100% - 140px));padding:7px 12px;border-radius:3px;font-size:11px;line-height:1.4;font-family:'Space Mono',monospace;background:rgba(17,20,24,.95);border:1px solid var(--border2);color:var(--text2);box-shadow:0 2px 12px rgba(0,0,0,.5)}
+#status-banner.on{display:block}
+#status-banner.warn{border-color:var(--accent);color:var(--accent)}
+#status-banner.error{border-color:var(--red);color:#ff8a8a}
+/* ── tonight controls (rendered inside the list, desktop + phone) ── */
+.tonight-bar{display:flex;align-items:center;flex-wrap:wrap;gap:6px 10px;padding:2px 0 10px;margin-bottom:8px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text2)}
+.tonight-within{display:flex;align-items:center;gap:6px}
+.tonight-within input[type=number]{width:56px;background:var(--surface2);border:1px solid var(--border2);color:var(--text);border-radius:3px;padding:3px 6px;font-size:11px}
+.tonight-stamp{flex:1;text-align:right;font-family:'Space Mono',monospace;font-size:10px;color:var(--text3)}
+@media (max-width: 768px) {
+  #status-banner { top: 52px; max-width: calc(100% - 24px); }
+  /* 16px stops iOS zooming the page when a field is focused, now that the
+     viewport no longer blocks zoom (pinch-zoom is back for readability) */
+  input, select, textarea, .search-input, #road-name-input, .tonight-within input[type=number] { font-size: 16px; }
+}

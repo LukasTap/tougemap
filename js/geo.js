@@ -16,15 +16,6 @@ export function polylineKm(points) {
   return d;
 }
 
-export function bearingLabel(lat1, lon1, lat2, lon2) {
-  const dLon = (lon2 - lon1) * d2r;
-  const y = Math.sin(dLon) * Math.cos(lat2 * d2r);
-  const x = Math.cos(lat1 * d2r) * Math.sin(lat2 * d2r) -
-            Math.sin(lat1 * d2r) * Math.cos(lat2 * d2r) * Math.cos(dLon);
-  const b = (Math.atan2(y, x) / d2r + 360) % 360;
-  return ['N','NE','E','SE','S','SW','W','NW'][Math.round(b / 45) % 8];
-}
-
 export function gridCellKey(lat, lon, cellDeg = 0.1) {
   const q = (v) => (Math.round(v / cellDeg) * cellDeg).toFixed(2);
   return `${q(lat)},${q(lon)}`;
