@@ -173,4 +173,5 @@ test('pointSummaries: each point\'s own worst fog and coldest hour, plus its nig
   const s = pointSummaries(roadConditions([{ label: 'Start', share: 0.5 }, { label: 'Summit', share: 0.5 }], [valley, top], now));
   assert.deepEqual(s.map(p => [p.label, p.fog, p.temp]), [['Start', 100, 10], ['Summit', 10, -3]]);
   assert.equal(s[0].risks.length, 11);
+  assert.deepEqual(s[0].hours, [20, 21, 22, 23, 0, 1, 2, 3, 4, 5, 6]);
 });

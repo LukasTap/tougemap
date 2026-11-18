@@ -1,22 +1,50 @@
 // js/library.js — road cards, thumbnails, sort/filter
 import { simplifyForThumbnail } from './geo.js';
 import { fogColor } from './curvature.js';
+import { inDriveWindow, DRIVE_FROM, DRIVE_TO } from './weather.js';
+
+// One mark per kind of forecast point, shared by the card rows and the
+// inspector rows so the two read the same: S start, ▲ summit (highest point),
+// ▼ low point (lowest — where valley fog collects), E end, M middle (used only
+// when a road has no elevation profile yet).
+export const POINT_MARK = { start: 'S', summit: '▲', low: '▼', end: 'E', mid: 'M' };
 
 // The night as colour: one cell per hour, 20:00→06:00, and one thin row per
-// forecast point along the road (start → summit → end), top to bottom.
+// forecast point along the road (start → summit → end), top to bottom, each
+// row marked with its point. Two thin lines bracket the driving window
+// (22:00–02:00), as the shaded band does on the inspector chart; once 22:00 has
+// passed the left line goes, because the window is already open.
 //
 // The strip replaced a single word ("EXTREME") because a word cannot tell a
 // night fogged end to end from one that is clear until 05:00 — opposite
 // decisions. The rows do the same for space: one row cannot tell a road fogged
 // end to end from one fogged only on its far side. Gapless, because a card is a
-// preview; the detail is in the inspector. rows: [{ label, risks: [...] }]
+// preview; the detail is in the inspector.
+// rows: [{ label, role, risks: [...], hours: [...] }]
 export function fogStripHtml(rows) {
   const live = (rows || []).filter(r => r.risks?.length);
   if (!live.length) return '<span>no forecast</span>';
+  const multi = live.length > 1;
   const worst = Math.max(...live.flatMap(r => r.risks));
-  const what = live.length > 1 ? `, one row per point along the road (${live.map(r => r.label).join(' → ')})` : '';
-  const body = live.map(r => `<span class="fog-row">${r.risks.map(v => `<i style="background:${fogColor(v)}"></i>`).join('')}</span>`).join('');
-  return `<span class="fog-strip${live.length > 1 ? ' multi' : ''}" title="${escapeHtml(`Fog risk by hour, 20:00–06:00${what} — peaks at ${worst}%`)}">${body}</span>`;
+  const hours = live[0].hours || [];
+  const what = multi ? `; rows top to bottom: ${live.map(r => `${POINT_MARK[r.role] || '·'} ${r.label}`).join(', ')}` : '';
+  const body = live.map((r, i) =>
+    (multi ? `<b class="fog-mark" style="grid-row:${i + 1}">${POINT_MARK[r.role] || '·'}</b>` : '') +
+    `<span class="fog-row" style="grid-row:${i + 1}">${r.risks.map(v => `<i style="background:${fogColor(v)}"></i>`).join('')}</span>`).join('');
+
+  // The driving window, as a share of the strip's width.
+  const n = hours.length;
+  const wa = hours.findIndex(inDriveWindow);
+  let windowMark = '';
+  if (n && wa >= 0) {
+    let wb = wa;
+    while (wb + 1 < n && inDriveWindow(hours[wb + 1])) wb++;
+    const cls = `${hours[wa] === DRIVE_FROM ? ' l' : ''}${hours[wb] === DRIVE_TO ? ' r' : ''}`;
+    windowMark = `<span class="fog-window" style="grid-row:1 / span ${live.length}">` +
+      `<span class="fog-window-box${cls}" style="left:${((wa / n) * 100).toFixed(2)}%;width:${(((wb - wa + 1) / n) * 100).toFixed(2)}%"></span></span>`;
+  }
+  const title = `Fog risk by hour, 20:00–06:00${what}. Lines mark the driving window, 22:00–02:00. Peaks at ${worst}%.`;
+  return `<span class="fog-strip${multi ? ' multi' : ''}" title="${escapeHtml(title)}">${body}${windowMark}</span>`;
 }
 
 // Escapes owner-authored text before it's injected via innerHTML, so a

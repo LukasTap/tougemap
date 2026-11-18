@@ -111,7 +111,8 @@ export function pointSummaries(conditions) {
       ele: typeof p.ele === 'number' ? Math.round(p.ele) : null,
       fog: hrs.length ? Math.max(...hrs.map(h => h.risk)) : null,
       temp: hrs.length ? Math.min(...hrs.map(h => h.temp)) : null,
-      risks: night.map(h => h.risk) // the whole night, for the card rows
+      risks: night.map(h => h.risk), // the whole night, for the card rows
+      hours: night.map(h => h.hour)  // which hour each of those is (the night may be part-spent)
     };
   });
 }

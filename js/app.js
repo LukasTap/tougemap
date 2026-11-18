@@ -15,7 +15,7 @@ import {
 import { roadProfile, pickWeatherPoints, withShares, needsTerrain, computeTerrain } from './terrain.js';
 import { showConditionsOnMap, hideConditionsOnMap } from './conditions-map.js';
 import { rankRoads, reachable } from './tonight-rank.js';
-import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
+import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml, POINT_MARK } from './library.js';
 import {
   onDraftUpdate, getDraftState, startPlacing, handleMapClick, clearRoutePoint,
   removeWaypoint, clearWaypoints, saveRoad, editMeta, renameRoad,
@@ -50,7 +50,7 @@ async function conditionsFor(road) {
 }
 
 // The card strip's rows: one per forecast point, along the road.
-const fogRowsOf = (cond) => pointSummaries(cond).map(p => ({ label: p.label, risks: p.risks }));
+const fogRowsOf = (cond) => pointSummaries(cond).map(p => ({ label: p.label, role: p.role, risks: p.risks, hours: p.hours }));
 
 // ── ONE-TIME ELEVATION BACKFILL (the device that can save) ──────────────────
 // Roads saved before elevation profiles existed get one, a road at a time, at a
@@ -522,7 +522,7 @@ function weatherHtml(cond, profile) {
   const rows = multi ? `<div class="where-rows">${pointStats.map(p => `
       <div class="where-row">
         <i class="where-dot" style="background:${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}"></i>
-        <span class="where-name">${escapeHtml(p.label)}</span>
+        <span class="where-name"><b class="where-mark">${POINT_MARK[p.role] || ""}</b> ${escapeHtml(p.label)}</span>
         <span class="where-ele">${p.ele != null ? `${p.ele} m` : ''}</span>
         <span class="where-val">${p.fog != null ? `fog ${p.fog}%` : '—'}${p.temp != null ? ` · <span class="${p.temp <= 3 ? 'w-ice' : ''}">${Math.round(p.temp)}°C</span>` : ''}</span>
       </div>`).join('')}</div>` : '';

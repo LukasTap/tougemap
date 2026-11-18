@@ -6,7 +6,7 @@
 //
 // Bump CACHE when this list changes; activation deletes every older cache
 // (including the old one full of tiles).
-const CACHE = 'tougemap-v5';
+const CACHE = 'tougemap-v6';
 const LEAFLET = [
   'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js',
   'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'
