@@ -10,6 +10,7 @@ export const TILES = {
 export let map = null;
 export const savedGroup = L.layerGroup();
 export const discoverGroup = L.layerGroup();
+export const conditionsGroup = L.layerGroup(); // Tonight view: roads coloured by conditions
 let curLayer = 'osm';
 
 export function initMap(elId) {

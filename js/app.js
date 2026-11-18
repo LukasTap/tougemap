@@ -8,11 +8,12 @@ import { loadAuth, saveToken, savePassphrase, forgetDevice } from './sync.js';
 import { createRepo } from './repo.js';
 import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
 import {
-  createWeatherClient, wmoDesc, nightGroups, nightExtremes, decisionHours, firstNight,
-  tonightRisks, buildNightChart, axisLabelIndices, LABEL_W, roadConditions, currentReadings,
+  createWeatherClient, wmoDesc, nightGroups, nightExtremes, decisionHours,
+  buildNightChart, axisLabelIndices, LABEL_W, roadConditions, currentReadings, pointSummaries,
   scrubPoints, nearestScrubPoint
 } from './weather.js';
-import { roadProfile, pickWeatherPoints, needsTerrain, computeTerrain } from './terrain.js';
+import { roadProfile, pickWeatherPoints, withShares, needsTerrain, computeTerrain } from './terrain.js';
+import { showConditionsOnMap, hideConditionsOnMap } from './conditions-map.js';
 import { rankRoads, reachable } from './tonight-rank.js';
 import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, escapeHtml, fogStripHtml } from './library.js';
 import {
@@ -42,10 +43,14 @@ export const appState = {
 // Resolves to null when no forecast is available.
 async function conditionsFor(road) {
   if (!road.points?.length) return null;
-  const points = pickWeatherPoints(roadProfile(road));
+  const profile = roadProfile(road);
+  const points = withShares(pickWeatherPoints(profile), profile[profile.length - 1]?.km || 0);
   const forecasts = await Promise.all(points.map(p => appState.weatherClient.get(p.lat, p.lon).catch(() => null)));
   return roadConditions(points, forecasts, appState.now());
 }
+
+// The card strip's rows: one per forecast point, along the road.
+const fogRowsOf = (cond) => pointSummaries(cond).map(p => ({ label: p.label, risks: p.risks }));
 
 // ── ONE-TIME ELEVATION BACKFILL (the device that can save) ──────────────────
 // Roads saved before elevation profiles existed get one, a road at a time, at a
@@ -134,6 +139,7 @@ function getDesktopContainer(name) {
 
 function switchView(name) {
   currentView = name;
+  if (name !== 'tonight') hideConditionsOnMap(); // other views show the roads purple
   const container = showView(name);
   renderView(name, container);
 }
@@ -185,7 +191,7 @@ function renderLibrary(container, seq) {
       if (!cond || !isCurrent(seq)) return;
       const metaEl = container.querySelector(`.road-lib-item[data-id="${r.id}"] .road-lib-meta`);
       if (!metaEl || metaEl.parentElement.querySelector('.fog-strip')) return;
-      metaEl.insertAdjacentHTML('afterend', fogStripHtml(tonightRisks(cond.hours)));
+      metaEl.insertAdjacentHTML('afterend', fogStripHtml(fogRowsOf(cond)));
     }).catch(() => {});
   }
 }
@@ -239,18 +245,21 @@ async function renderTonight(container, seq) {
     const byId = new Map(entries.map(e => [e.road.id, e]));
     results.innerHTML = ranked.map(road => {
       const entry = byId.get(road.id);
-      const risks = entry?.conditions ? tonightRisks(entry.conditions.hours) : null;
+      const fogRows = entry?.conditions ? fogRowsOf(entry.conditions) : null;
       const dist = road.driveTimeFromHome?.km != null ? `<span>${road.driveTimeFromHome.km} km away</span>` : '';
       return `<div class="road-lib-item" data-id="${escapeHtml(road.id)}">
         ${thumbnailSvg(road.points)}
         <div class="road-lib-name">${escapeHtml(road.name)}</div>
         <div class="road-lib-meta"><span>${escapeHtml(road.km)} km</span>${dist}</div>
-        ${fogStripHtml(risks)}
+        ${fogStripHtml(fogRows)}
         <div class="road-lib-chips">${metaChipsHtml(road.meta)}</div>
       </div>`;
     }).join('');
     wireCardClicks(results, ranked);
   }
+  // Every road on the map in its sections' colours — all of them, not just the
+  // ones the distance filter keeps in the list: the map is for looking around.
+  showConditionsOnMap(entries);
   const stamp = container.querySelector('[data-t="stamp"]');
   if (stamp) stamp.textContent = 'Updated ' + appState.now().toTimeString().slice(0, 5);
 }
@@ -509,14 +518,7 @@ function weatherHtml(cond, profile) {
     : '';
 
   // Each point on its own, over the same hours.
-  const pointStats = cond.points.map(p => {
-    const hrs = decisionHours(firstNight(p.hours));
-    return {
-      label: p.label, km: p.km, ele: typeof p.ele === 'number' ? Math.round(p.ele) : null,
-      fog: hrs.length ? Math.max(...hrs.map(h => h.risk)) : null,
-      temp: hrs.length ? Math.min(...hrs.map(h => h.temp)) : null
-    };
-  });
+  const pointStats = pointSummaries(cond);
   const rows = multi ? `<div class="where-rows">${pointStats.map(p => `
       <div class="where-row">
         <i class="where-dot" style="background:${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}"></i>

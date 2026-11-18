@@ -6,7 +6,7 @@
 //
 // Bump CACHE when this list changes; activation deletes every older cache
 // (including the old one full of tiles).
-const CACHE = 'tougemap-v4';
+const CACHE = 'tougemap-v5';
 const LEAFLET = [
   'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.js',
   'https://cdn.jsdelivr.net/npm/leaflet@1.9.4/dist/leaflet.css'
@@ -14,7 +14,7 @@ const LEAFLET = [
 // Every module the app imports must be here, or a first visit followed by going
 // offline can't boot (test/sw.test.js checks this list against js/).
 const SHELL = ['./', './index.html', './styles.css', './manifest.json', './icon-192.png', './icon-512.png',
-  './js/app.js', './js/config.js', './js/crypto.js', './js/curvature.js', './js/geo.js', './js/http.js',
+  './js/app.js', './js/conditions-map.js', './js/config.js', './js/crypto.js', './js/curvature.js', './js/geo.js', './js/http.js',
   './js/library.js', './js/map.js', './js/planner.js', './js/repo.js', './js/routing.js', './js/store.js',
   './js/sync.js', './js/terrain.js', './js/tonight-rank.js', './js/ui.js', './js/weather.js'];
 

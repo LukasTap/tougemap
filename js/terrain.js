@@ -79,6 +79,42 @@ export function pickWeatherPoints(profile) {
   return picked.sort((a, b) => a.km - b.km);
 }
 
+// How much of the road each point speaks for: the stretch closer to it, along
+// the road, than to its neighbours — from halfway back to the previous point to
+// halfway on to the next. Adds { fromKm, toKm, share }; shares sum to 1.
+// This is what keeps one fogged-in end from condemning a whole pass.
+export function withShares(points, totalKm) {
+  if (!points.length) return [];
+  if (points.length === 1 || !(totalKm > 0))
+    return points.map(p => ({ ...p, fromKm: 0, toKm: totalKm || 0, share: 1 / points.length }));
+  return points.map((p, i) => {
+    const fromKm = i === 0 ? 0 : (points[i - 1].km + p.km) / 2;
+    const toKm = i === points.length - 1 ? totalKm : (p.km + points[i + 1].km) / 2;
+    return { ...p, fromKm, toKm, share: (toKm - fromKm) / totalKm };
+  });
+}
+
+// The road's own geometry cut into the stretches above, for drawing each in
+// its point's colour. Neighbouring sections share their boundary vertex so the
+// line stays continuous. → [{ point, latlngs: [[lat, lon], ...] }]
+export function splitRoadSections(roadPoints, sharedPoints) {
+  if (!roadPoints?.length || !sharedPoints?.length) return [];
+  const cum = [0];
+  for (let i = 1; i < roadPoints.length; i++)
+    cum.push(cum[i - 1] + haversineKm(roadPoints[i - 1].lat, roadPoints[i - 1].lon, roadPoints[i].lat, roadPoints[i].lon));
+  const sections = sharedPoints.map(point => ({ point, latlngs: [] }));
+  let s = 0;
+  for (let i = 0; i < roadPoints.length; i++) {
+    while (s < sections.length - 1 && cum[i] > sections[s].point.toKm) {
+      s++;
+      const prev = sections[s - 1].latlngs;
+      if (prev.length) sections[s].latlngs.push(prev[prev.length - 1]); // continuity
+    }
+    sections[s].latlngs.push([roadPoints[i].lat, roadPoints[i].lon]);
+  }
+  return sections.filter(x => x.latlngs.length >= 2);
+}
+
 export async function fetchElevations(samples, fetchFn) {
   const q = (key) => samples.map(p => p[key].toFixed(5)).join(',');
   const res = await fetchFn(`${ELEVATION_API}?latitude=${q('lat')}&longitude=${q('lon')}`);

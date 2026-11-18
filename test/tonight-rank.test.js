@@ -20,13 +20,29 @@ function mkHourly(temp, dew, rh, wind, precip) {
   return { time, temperature_2m: T, dew_point_2m: D, relative_humidity_2m: R, windspeed_10m: W, precipitation_probability: P, weathercode: C };
 }
 const cond = (...fcs) => roadConditions(fcs.map((_, i) => ({ label: `P${i}` })), fcs, now);
+// Points with explicit shares of the road (terrain.js withShares).
+const shared = (pairs) => roadConditions(pairs.map(([label, share]) => ({ label, share })), pairs.map(p => p[2]), now);
+const coldFc = { hourly: mkHourly(-2, -9, 50, 20, 0) }; // dry, breezy, freezing
 
 test('clear night scores better (lower) than foggy night', () => {
   assert.ok(scoreRoad(cond(clearFc)).score < scoreRoad(cond(foggyFc)).score);
 });
 
-test('a road is scored on its WORST point: clear valley + fogged summit = foggy', () => {
-  assert.equal(scoreRoad(cond(clearFc, foggyFc)).fog, scoreRoad(cond(foggyFc)).fog);
+// The Pezinská Baba case: start at the bottom, summit, end at the bottom on the
+// far side — and only the far side in fog. Most of the road is drivable, so it
+// must rank between a clear road and one fogged end to end.
+test('one fogged-in end counts for its share of the road, not the whole road', () => {
+  const allClear = scoreRoad(shared([['Start', 0.3, clearFc], ['Summit', 0.45, clearFc], ['End', 0.25, clearFc]]));
+  const farSide = scoreRoad(shared([['Start', 0.3, clearFc], ['Summit', 0.45, clearFc], ['End', 0.25, foggyFc]]));
+  const allFog = scoreRoad(shared([['Start', 0.3, foggyFc], ['Summit', 0.45, foggyFc], ['End', 0.25, foggyFc]]));
+  assert.ok(allClear.score < farSide.score && farSide.score < allFog.score, `${allClear.score} < ${farSide.score} < ${allFog.score}`);
+  const endFog = scoreRoad(shared([['End', 1, foggyFc]])).fog, clear = scoreRoad(shared([['Start', 1, clearFc]])).fog;
+  assert.equal(farSide.fog, Math.round(0.75 * clear + 0.25 * endFog));
+});
+
+test('ice still counts at the coldest point, whatever its share', () => {
+  const s = scoreRoad(shared([['Start', 0.9, clearFc], ['Summit', 0.1, coldFc]]));
+  assert.equal(s.temp, -2);
 });
 
 test('rankRoads puts clear-night road first, forecastless road last', () => {

@@ -214,6 +214,17 @@ let selectListener = null;     // (road|null) => void, see onRoadSelect()
 /** Register a listener invoked with the road object (or null) when selection changes. */
 export function onRoadSelect(cb) { selectListener = cb; }
 
+// While the Tonight map colours the roads by conditions, the purple lines step
+// aside (opacity 0) — but stay on the map, so the invisible tap targets still
+// select roads.
+let savedMuted = false;
+const savedStyle = (selected) => ({ weight: selected ? 6 : 4, opacity: savedMuted ? 0 : (selected ? 1 : 0.75) });
+
+export function setSavedRoadsMuted(muted) {
+  savedMuted = muted;
+  for (const [rid, layer] of savedLayers) layer.setStyle(savedStyle(rid === selectedRoadId));
+}
+
 /** (Re)draws every road in appState.data.roads onto savedGroup, purple, click-to-select. */
 export function renderSavedRoads(appState) {
   savedGroup.clearLayers();
@@ -224,8 +235,7 @@ export function renderSavedRoads(appState) {
     const latlngs = road.points.map(p => [p.lat, p.lon]);
     const layer = L.polyline(latlngs, {
       color: SAVED_COLOR,
-      weight: isSelected ? 6 : 4,
-      opacity: isSelected ? 1 : 0.75,
+      ...savedStyle(isSelected),
       lineJoin: 'round', lineCap: 'round'
     });
     layer.on('click', () => selectRoad(road.id));
@@ -248,7 +258,7 @@ export function renderSavedRoads(appState) {
 export function selectRoad(id) {
   selectedRoadId = id;
   for (const [rid, layer] of savedLayers) {
-    layer.setStyle({ weight: rid === id ? 6 : 4, opacity: rid === id ? 1 : 0.75 });
+    layer.setStyle(savedStyle(rid === id));
   }
   const road = lastRoads.find(r => r.id === id) || null;
   if (selectListener) selectListener(road);

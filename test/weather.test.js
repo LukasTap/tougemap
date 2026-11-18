@@ -156,3 +156,21 @@ test('currentReadings picks the coldest point right now', () => {
   const c = roadConditions([{ label: 'Start' }, { label: 'Summit' }], [warm, cold], now);
   assert.equal(currentReadings(c, now).coldest.label, 'Summit');
 });
+
+test('mergeNightHours: riskAvg weighs each point by its share of the road', () => {
+  const now = new Date('2026-09-16T14:00:00');
+  const clear = nightHours(buildForecast(() => MILD), now), soup = nightHours(buildForecast(() => SOUPY), now);
+  const merged = mergeNightHours([{ label: 'Start', share: 0.75, hours: clear }, { label: 'End', share: 0.25, hours: soup }]);
+  assert.equal(merged[0].risk, 100);                       // worst point, for the chart
+  assert.equal(merged[0].riskAvg, Math.round(0.75 * 10 + 0.25 * 100)); // share-weighted, for ranking
+});
+
+test('pointSummaries: each point\'s own worst fog and coldest hour, plus its night row', async () => {
+  const { pointSummaries } = await import('../js/weather.js');
+  const now = new Date('2026-09-16T14:00:00');
+  const valley = buildForecast(t => (t.getHours() === 23 ? SOUPY : MILD));
+  const top = buildForecast(t => ({ ...MILD, temp: t.getHours() === 1 ? -3 : 4 }));
+  const s = pointSummaries(roadConditions([{ label: 'Start', share: 0.5 }, { label: 'Summit', share: 0.5 }], [valley, top], now));
+  assert.deepEqual(s.map(p => [p.label, p.fog, p.temp]), [['Start', 100, 10], ['Summit', 10, -3]]);
+  assert.equal(s[0].risks.length, 11);
+});

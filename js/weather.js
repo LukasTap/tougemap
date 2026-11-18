@@ -66,19 +66,27 @@ export function tonightRisks(hours) {
 }
 
 // ── SEVERAL POINTS PER ROAD ─────────────────────────────────────────────────
-// One road, several forecast points (terrain.js): combined hour by hour into the
-// worst case — most fog, lowest temperature, calmest wind, highest rain chance —
-// remembering WHERE the fog and the cold came from, so the inspector can say
-// "fog 80% at the summit". Only hours every point has are kept.
+// One road, several forecast points (terrain.js), combined hour by hour two ways:
+//   risk / temp / wind / precip — the WORST point: what the chart draws, and
+//       remembered with WHERE (riskAt / tempAt) so the inspector can say
+//       "fog 80% at the summit";
+//   riskAvg / precipAvg — weighted by how much of the road each point speaks
+//       for (its `share`). One fogged-in end of a pass is a quarter of the road,
+//       not all of it; the ranking uses these.
+// Only hours every point has are kept.
 export function mergeNightHours(perPoint) {
   if (!perPoint.length) return [];
   const byTime = new Map();
   for (const p of perPoint) {
+    const w = p.share ?? 1 / perPoint.length;
     for (const h of p.hours) {
       const k = h.t.getTime();
       const cur = byTime.get(k);
-      if (!cur) { byTime.set(k, { ...h, riskAt: p.label, tempAt: p.label, n: 1 }); continue; }
-      cur.n++;
+      if (!cur) {
+        byTime.set(k, { ...h, riskAt: p.label, tempAt: p.label, n: 1, wsum: w, rsum: h.risk * w, psum: h.precip * w });
+        continue;
+      }
+      cur.n++; cur.wsum += w; cur.rsum += h.risk * w; cur.psum += h.precip * w;
       if (h.risk > cur.risk) { cur.risk = h.risk; cur.riskAt = p.label; }
       if (h.temp < cur.temp) { cur.temp = h.temp; cur.tempAt = p.label; }
       cur.wind = Math.min(cur.wind, h.wind);
@@ -88,7 +96,24 @@ export function mergeNightHours(perPoint) {
   return [...byTime.values()]
     .filter(h => h.n === perPoint.length)
     .sort((a, b) => a.t - b.t)
-    .map(({ n, ...h }) => h);
+    .map(({ n, wsum, rsum, psum, ...h }) => ({ ...h, riskAvg: Math.round(rsum / wsum), precipAvg: Math.round(psum / wsum) }));
+}
+
+// Each point on its own over the hours that decide the night (decisionHours):
+// its worst fog and lowest temperature, plus the stretch of road it covers.
+// One summary feeds the inspector rows, the card rows and the Tonight map.
+export function pointSummaries(conditions) {
+  return conditions.points.map(p => {
+    const night = firstNight(p.hours);
+    const hrs = decisionHours(night);
+    return {
+      label: p.label, role: p.role, km: p.km, fromKm: p.fromKm, toKm: p.toKm, share: p.share,
+      ele: typeof p.ele === 'number' ? Math.round(p.ele) : null,
+      fog: hrs.length ? Math.max(...hrs.map(h => h.risk)) : null,
+      temp: hrs.length ? Math.min(...hrs.map(h => h.temp)) : null,
+      risks: night.map(h => h.risk) // the whole night, for the card rows
+    };
+  });
 }
 
 // points: [{ label, ele?, ... }] with forecasts in the same order (null = failed).

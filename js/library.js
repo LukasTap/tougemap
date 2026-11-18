@@ -2,17 +2,21 @@
 import { simplifyForThumbnail } from './geo.js';
 import { fogColor } from './curvature.js';
 
-// The night as a strip of colour: one segment per hour, 20:00→06:00.
+// The night as colour: one cell per hour, 20:00→06:00, and one thin row per
+// forecast point along the road (start → summit → end), top to bottom.
 //
-// This replaced a single word ("EXTREME"). A word cannot tell a night that is
-// fogged end to end from one that is clear until 05:00 and then shuts — those
-// are opposite decisions. Gapless, because a card is a preview: the shape of
-// the night is the point here, the detail is in the inspector.
-export function fogStripHtml(risks) {
-  if (!risks || !risks.length) return '<span>no forecast</span>';
-  const worst = Math.max(...risks);
-  const cells = risks.map(r => `<i style="background:${fogColor(r)}"></i>`).join('');
-  return `<span class="fog-strip" title="Fog risk by hour, 20:00–06:00 — peaks at ${worst}%">${cells}</span>`;
+// The strip replaced a single word ("EXTREME") because a word cannot tell a
+// night fogged end to end from one that is clear until 05:00 — opposite
+// decisions. The rows do the same for space: one row cannot tell a road fogged
+// end to end from one fogged only on its far side. Gapless, because a card is a
+// preview; the detail is in the inspector. rows: [{ label, risks: [...] }]
+export function fogStripHtml(rows) {
+  const live = (rows || []).filter(r => r.risks?.length);
+  if (!live.length) return '<span>no forecast</span>';
+  const worst = Math.max(...live.flatMap(r => r.risks));
+  const what = live.length > 1 ? `, one row per point along the road (${live.map(r => r.label).join(' → ')})` : '';
+  const body = live.map(r => `<span class="fog-row">${r.risks.map(v => `<i style="background:${fogColor(v)}"></i>`).join('')}</span>`).join('');
+  return `<span class="fog-strip${live.length > 1 ? ' multi' : ''}" title="${escapeHtml(`Fog risk by hour, 20:00–06:00${what} — peaks at ${worst}%`)}">${body}</span>`;
 }
 
 // Escapes owner-authored text before it's injected via innerHTML, so a
@@ -56,11 +60,11 @@ export function metaChipsHtml(meta = {}) {
   return chips.join('');
 }
 
-export function roadCardHtml(road, { risks = null } = {}) {
+export function roadCardHtml(road, { fogRows = null } = {}) {
   // Distance by road (km) is the metric we trust — drive-time is unreliable on
   // the SK network, so it stays a subnote in the inspector and never appears here.
   const dh = road.driveTimeFromHome?.km != null ? `${escapeHtml(road.driveTimeFromHome.km)} km from home` : '— from home';
-  const fog = risks ? fogStripHtml(risks) : '';
+  const fog = fogRows ? fogStripHtml(fogRows) : '';
   return `
     <div class="road-lib-item" data-id="${escapeHtml(road.id)}">
       ${thumbnailSvg(road.points)}

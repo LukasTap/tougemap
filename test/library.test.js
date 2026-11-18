@@ -35,3 +35,13 @@ test('metaChipsHtml escapes tag values', async () => {
 test('thumbnailSvg tolerates a road with no geometry', () => {
   assert.match(thumbnailSvg([]), /<svg/);
 });
+
+test('fogStripHtml draws one row per point, one cell per hour', async () => {
+  const { fogStripHtml } = await import('../js/library.js');
+  const html = fogStripHtml([{ label: 'Start', risks: [10, 20] }, { label: 'Summit', risks: [90, 95] }, { label: 'End', risks: [10, 10] }]);
+  assert.equal((html.match(/class="fog-row"/g) || []).length, 3);
+  assert.equal((html.match(/<i /g) || []).length, 6);
+  assert.match(html, /fog-strip multi/);
+  assert.match(html, /Start → Summit → End/);
+  assert.match(fogStripHtml(null), /no forecast/);
+});

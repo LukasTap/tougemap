@@ -86,3 +86,25 @@ test('a road without terrain: bare samples, start/middle/end, flagged for backfi
   assert.equal(needsTerrain(road), true);
   assert.equal(needsTerrain({ id: 3, points: [] }), false);
 });
+
+test('withShares: each point covers the stretch closer to it; shares sum to 1', async () => {
+  const { withShares } = await import('../js/terrain.js');
+  const pts = withShares([{ km: 0, label: 'Start' }, { km: 6, label: 'Summit' }, { km: 16, label: 'End' }], 16);
+  assert.deepEqual(pts.map(p => [p.fromKm, p.toKm]), [[0, 3], [3, 11], [11, 16]]);
+  assert.ok(Math.abs(pts.reduce((s, p) => s + p.share, 0) - 1) < 1e-9);
+  assert.equal(withShares([{ km: 4 }], 9)[0].share, 1);
+});
+
+test('splitRoadSections cuts the geometry at the share boundaries, without gaps', async () => {
+  const { withShares, splitRoadSections } = await import('../js/terrain.js');
+  const road = Array.from({ length: 101 }, (_, i) => ({ lat: 48 + i * 0.001, lon: 19 })); // ~11.1 km north
+  const total = haversineKm(48, 19, 48.1, 19);
+  const pts = withShares([{ km: 0, label: 'Start' }, { km: total / 2, label: 'Summit' }, { km: total, label: 'End' }], total);
+  const secs = splitRoadSections(road, pts);
+  assert.deepEqual(secs.map(s => s.point.label), ['Start', 'Summit', 'End']);
+  for (let i = 1; i < secs.length; i++) assert.deepEqual(secs[i].latlngs[0], secs[i - 1].latlngs.at(-1), 'sections meet');
+  assert.deepEqual(secs[0].latlngs[0], [48, 19]);
+  assert.deepEqual(secs.at(-1).latlngs.at(-1), [48.1, 19]);
+  const n = secs.map(s => s.latlngs.length);
+  assert.ok(n[1] > n[0] && n[1] > n[2], `summit covers the middle half: ${n}`);
+});

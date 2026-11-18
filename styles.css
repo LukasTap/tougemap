@@ -348,3 +348,24 @@ path.leaflet-interactive:focus{outline:none !important}
 .where-ele,.where-val{font-family:'Space Mono',monospace;font-size:10px;color:var(--text3)}
 .where-val{color:var(--text2);text-align:right}
 .w-ice{color:#a8dcf0}
+/* card strip: one thin row per forecast point along the road (start → end) */
+.fog-strip{flex-direction:column;gap:1px;height:auto}
+.fog-row{display:flex;height:7px}
+.fog-strip.multi .fog-row{height:4px}
+.fog-row i{flex:1}
+/* ── Tonight map legend ── */
+#map-legend{display:none;position:absolute;left:8px;bottom:34px;z-index:999;padding:6px 9px;border-radius:3px;background:rgba(17,20,24,.92);border:1px solid var(--border);font-family:'Space Mono',monospace;font-size:9px;color:var(--text2);pointer-events:none}
+#map-legend.on{display:block}
+.lg-title{color:var(--text3);letter-spacing:1px;text-transform:uppercase;margin-bottom:4px}
+.lg-row{display:flex;gap:8px;flex-wrap:wrap}
+.lg-row + .lg-row{margin-top:3px}
+.lg-row span{display:inline-flex;align-items:center;gap:3px;white-space:nowrap}
+.lg-row i{display:inline-block;width:12px;height:4px;border-radius:2px}
+.lg-row i.lg-casing{height:6px;background:transparent;border:2px solid;box-sizing:border-box}
+@media (max-width: 768px) {
+  #map-legend { bottom: auto; top: 52px; left: 8px; }
+}
+@media (max-width: 768px) {
+  /* both pinned top-left/centre on a phone: the notice moves below the legend */
+  #map-wrap:has(#map-legend.on) #status-banner { top: 120px; }
+}

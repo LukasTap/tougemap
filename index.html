@@ -138,6 +138,20 @@
     <div id="map-wrap">
       <div id="map"></div>
       <div id="status-banner" role="status" aria-live="polite"></div>
+      <!-- Tonight view only: what the road colours mean (conditions-map.js) -->
+      <div id="map-legend" aria-label="Map legend">
+        <div class="lg-title">Fog · worst of 22–02</div>
+        <div class="lg-row">
+          <span><i style="background:#3ecf6e"></i>&lt;30%</span>
+          <span><i style="background:#f5c842"></i>30–59</span>
+          <span><i style="background:#8090c8"></i>60–79</span>
+          <span><i style="background:#c8b4ff"></i>80+</span>
+        </div>
+        <div class="lg-row">
+          <span><i class="lg-casing" style="border-color:#7fc8e8"></i>0–3°C</span>
+          <span><i class="lg-casing" style="border-color:#d8f0fa"></i>≤0°C</span>
+        </div>
+      </div>
       <div id="layer-toggle">
         <button class="layer-btn active" id="btn-osm">OSM</button>
         <button class="layer-btn" id="btn-topo">Topo</button>
