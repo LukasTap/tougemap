@@ -9,29 +9,39 @@
 //
 // Fog is the line, ice the outline: the two never compete for the same channel.
 //
-// The outline blues are deliberately darker than the chart's ice bands: the
-// chart sits on the dark panel, the map on light tiles, where the chart's
-// near-white ice colour simply vanished.
-import { map, conditionsGroup } from './map.js';
+// The outline colours depend on the base map. On the light map the chart's
+// near-white ice colour vanished, so day mode uses two strong blues; on the
+// night map those deep blues would sink into the dark instead, so night mode
+// goes back to the chart's own pale frost/ice colours. (The legend swatches
+// follow via CSS — see .lg-frost / .lg-ice.)
+import { map, conditionsGroup, isNight, onNightChange } from './map.js';
 import { fogColor } from './curvature.js';
 import { splitRoadSections } from './terrain.js';
 import { pointSummaries, FREEZE_C, FROST_C } from './weather.js';
 import { setSavedRoadsMuted } from './planner.js';
 
-export const MAP_FROST = '#3d9be0', MAP_ICE = '#1450b8';
+export const OUTLINE = {
+  day:   { frost: '#3d9be0', ice: '#1450b8' },
+  night: { frost: '#7fc8e8', ice: '#d8f0fa' }
+};
 const EDGE = '#0a0c0e', NO_DATA = '#5a6a80';
 const line = (latlngs, color, weight, opacity = 1) =>
   L.polyline(latlngs, { color, weight, opacity, interactive: false, lineCap: 'round', lineJoin: 'round' });
 
+let shown = null; // the entries on the map right now, so a mode switch can redraw them
+onNightChange(() => { if (shown) showConditionsOnMap(shown); });
+
 // entries: [{ road, conditions }] (conditions null = no forecast).
 export function showConditionsOnMap(entries) {
+  shown = entries;
   conditionsGroup.clearLayers();
+  const ring = OUTLINE[isNight() ? 'night' : 'day'];
   const outlines = [], edges = [], lines = [];
   for (const { road, conditions } of entries) {
     if (!conditions || !road.points?.length) continue;
     for (const { point, latlngs } of splitRoadSections(road.points, pointSummaries(conditions))) {
       if (point.temp != null && point.temp <= FROST_C)
-        outlines.push(line(latlngs, point.temp <= FREEZE_C ? MAP_ICE : MAP_FROST, 15, 0.95));
+        outlines.push(line(latlngs, point.temp <= FREEZE_C ? ring.ice : ring.frost, 15, 0.95));
       // A thin dark edge, so the pale fog colours (yellow, lavender) hold up on light tiles.
       edges.push(line(latlngs, EDGE, 7.5, 0.55));
       lines.push(line(latlngs, point.fog != null ? fogColor(point.fog) : NO_DATA, 5));
@@ -46,6 +56,7 @@ export function showConditionsOnMap(entries) {
 }
 
 export function hideConditionsOnMap() {
+  shown = null;
   conditionsGroup.clearLayers();
   conditionsGroup.remove();
   setSavedRoadsMuted(false);

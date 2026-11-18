@@ -3,7 +3,7 @@
 // Library / Tonight / Discover-or-Near-me views plus the desktop-only
 // planner (draw/save/edit/home) and Discover curvature UI.
 
-import { initMap, setLayer, locate, sortByProximity, map, discoverGroup } from './map.js';
+import { initMap, setLayer, setNight, isNight, locate, sortByProximity, map, discoverGroup } from './map.js';
 import { loadAuth, saveToken, savePassphrase, forgetDevice } from './sync.js';
 import { createRepo } from './repo.js';
 import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
@@ -920,6 +920,7 @@ function wireLayerToggle() {
   document.getElementById('btn-osm')?.addEventListener('click', () => setLayer('osm'));
   document.getElementById('btn-topo')?.addEventListener('click', () => setLayer('topo'));
   document.getElementById('btn-sat')?.addEventListener('click', () => setLayer('sat'));
+  document.getElementById('btn-night')?.addEventListener('click', () => setNight(!isNight()));
 }
 
 function wireMapClick() {

@@ -381,3 +381,17 @@ path.leaflet-interactive:focus{outline:none !important}
 .fog-window-box.l{border-left:1.5px solid rgba(232,234,240,.85)}
 .fog-window-box.r{border-right:1.5px solid rgba(232,234,240,.85)}
 .where-mark{display:inline-block;width:10px;text-align:center;font-family:'Space Mono',monospace;font-weight:400;color:var(--text3)}
+/* ── night mode: darken the base map only (tile pane), never the roads ── */
+#map-wrap{--map-frost:#3d9be0;--map-ice:#1450b8}
+#map-wrap.night{--map-frost:#7fc8e8;--map-ice:#d8f0fa}
+#map-wrap.night .leaflet-tile-pane{filter:invert(1) hue-rotate(180deg) brightness(.92) contrast(.88) saturate(.55)}
+#map-wrap.night.base-sat .leaflet-tile-pane{filter:brightness(.5) saturate(.75)}
+#map-wrap.night .leaflet-container{background:#0a0c0e}
+#map-wrap.night .leaflet-control-attribution{background:rgba(17,20,24,.85);color:var(--text3)}
+#map-wrap.night .leaflet-control-attribution a{color:var(--text2)}
+.lg-row i.lg-frost{border-color:var(--map-frost)}
+.lg-row i.lg-ice{border-color:var(--map-ice)}
+@media (max-width: 768px) {
+  /* the layer column ended 5px inside the zoom buttons; lift it clear */
+  #layer-toggle { bottom: 100px; }
+}

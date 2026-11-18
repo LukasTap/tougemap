@@ -17,6 +17,7 @@ export function initMap(elId) {
   map = L.map(elId, { center: [48.8, 19.5], zoom: 9, layers: [TILES.osm] });
   map.zoomControl.setPosition('bottomright');
   savedGroup.addTo(map);
+  applyMapClasses();
   return map;
 }
 
@@ -26,6 +27,35 @@ export function setLayer(name) {
   curLayer = name;
   ['osm','topo','sat'].forEach(k =>
     document.getElementById('btn-' + k)?.classList.toggle('active', k === name));
+  applyMapClasses();
+}
+
+// ── NIGHT MODE ───────────────────────────────────────────────────────────────
+// Darkens the base map only, with a CSS filter on Leaflet's tile pane (no extra
+// tile service): street and topo maps are inverted into a dark map, satellite
+// is dimmed instead (an inverted photo is unreadable). Roads, markers and the
+// Tonight colours sit in other panes and are untouched. Remembered per device.
+const NIGHT_KEY = 'tougemap_night';
+let night = (() => { try { return localStorage.getItem(NIGHT_KEY) === '1'; } catch { return false; } })();
+const nightListeners = new Set();
+
+export const isNight = () => night;
+export function onNightChange(cb) { nightListeners.add(cb); }
+
+export function setNight(on) {
+  night = !!on;
+  try { localStorage.setItem(NIGHT_KEY, night ? '1' : '0'); } catch { /* per-device nicety */ }
+  applyMapClasses();
+  for (const cb of nightListeners) cb(night);
+}
+
+function applyMapClasses() {
+  const wrap = document.getElementById('map-wrap');
+  if (wrap) {
+    wrap.classList.toggle('night', night);
+    wrap.classList.toggle('base-sat', curLayer === 'sat');
+  }
+  document.getElementById('btn-night')?.classList.toggle('active', night);
 }
 
 export function locate() {
