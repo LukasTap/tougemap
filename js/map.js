@@ -11,12 +11,14 @@ export let map = null;
 export const savedGroup = L.layerGroup();
 export const discoverGroup = L.layerGroup();
 export const conditionsGroup = L.layerGroup(); // Tonight view: roads coloured by conditions
+export const pinsGroup = L.layerGroup();       // hazard pins (selected road, or all when zoomed in)
 let curLayer = 'osm';
 
 export function initMap(elId) {
   map = L.map(elId, { center: [48.8, 19.5], zoom: 9, layers: [TILES.osm] });
   map.zoomControl.setPosition('bottomright');
   savedGroup.addTo(map);
+  pinsGroup.addTo(map);
   applyMapClasses();
   return map;
 }

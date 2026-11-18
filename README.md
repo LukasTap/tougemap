@@ -23,6 +23,11 @@ tool.
   passphrase, the token and the offline copy from that browser.
 - Roads are kept in IndexedDB too (decrypted), so the app works **offline** in the
   field. When it's showing that offline copy, a banner says so and saving is off.
+- **Hazard pins** mark spots on a road: bad surface, wildlife crossing, tricky
+  corner, or a plain note. Add them on the PC (road details → + Add pin → click
+  the road); drag to move along the road, click for edit/delete. They show for the
+  selected road, or for every road once zoomed in, plus as ticks on the
+  elevation strip.
 - Weather is **never** stored — always fetched fresh (with a 30-minute in-session
   de-dupe).
 - **Saving is safe against stale copies.** The app remembers exactly which version
@@ -73,6 +78,8 @@ python -m http.server 5178        # then open http://localhost:5178/
 **Sample data:** `http://localhost:5178/?fixture` loads the made-up roads in
 `dev/fixture-roads.json` instead of the real library, with saving switched off.
 Handy for working on the UI without the passphrase. Only works on localhost.
+Add `&fakesave` (`/?fixture&fakesave`) to try every editing flow (pins, rename,
+home…): "saves" then only change the page's memory and nothing is sent anywhere.
 
 **Tests** (Node 20+, zero dependencies):
 ```bash
@@ -100,7 +107,10 @@ js/
   ui.js             view switching, bottom sheet, modal, unlock/settings, status banner
   map.js            Leaflet map, layers, GPS locate
   library.js        road cards, shape thumbnails, sort/filter, escaping
-  planner.js        PC-only: draw / route / save / edit, home, drive distance
+  planner.js        PC-only: draw / route / save / edit, home, drive distance, pins
+  pins.js           hazard pins: types, snapping onto the road
+  terrain.js        elevation profile, forecast points along a road
+  conditions-map.js Tonight map: roads coloured by section
   repo.js           the loaded library + the only way to change it (copy → write → adopt)
   sync.js           GitHub read / write, sha pinning, local auth
   crypto.js         passphrase encryption (AES-GCM + PBKDF2, gzip)

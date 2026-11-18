@@ -10,6 +10,7 @@
 // is stale for any reason is rejected by GitHub instead of overwriting.
 import { readRoads, writeRoads } from './sync.js';
 import { emptyData } from './store.js';
+import { DEV_FAKE_SAVE } from './config.js';
 
 const isOnline = () => typeof navigator === 'undefined' || navigator.onLine !== false;
 
@@ -19,6 +20,7 @@ export function createRepo({ read = readRoads, write = writeRoads, online = isOn
 
   // Why a write would be refused right now, or null when it's allowed.
   function writeBlock(auth) {
+    if (DEV_FAKE_SAVE && state.source === 'fixture') return null; // localhost dev: fake saves
     if (!auth?.token) return 'No GitHub token on this device — add one in 🔑 settings';
     if (state.source === 'fixture') return 'Sample data — saving is switched off';
     if (state.source !== 'remote') return "Roads couldn't be loaded from GitHub, so saving is off until a reload succeeds";

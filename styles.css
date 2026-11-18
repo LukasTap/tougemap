@@ -402,3 +402,23 @@ path.leaflet-interactive:focus{outline:none !important}
 .w-wet{color:#7fb6e8}
 /* legend entries hidden when tonight's map has none of them */
 #map-legend [hidden]{display:none !important}
+/* ── hazard pins ── */
+.pin-icon span{display:flex;align-items:center;justify-content:center;width:24px;height:24px;border-radius:50%;background:var(--surface);border:1.5px solid var(--accent);font-size:12px;line-height:1;box-shadow:0 2px 6px rgba(0,0,0,.5);cursor:pointer}
+.pins{margin:2px 0 4px;padding:8px 10px;background:var(--surface2);border:1px solid var(--border);border-radius:4px}
+.pins-head{display:flex;align-items:center;justify-content:space-between;margin-bottom:6px}
+.pin-row{display:grid;grid-template-columns:44px 16px 1fr;align-items:baseline;gap:6px;padding:3px 0;font-size:11px;color:var(--text2);cursor:pointer;border-top:1px solid var(--border)}
+.pin-row:first-of-type{border-top:none}
+.pin-row:hover{color:var(--text)}
+.pin-km{font-family:'Space Mono',monospace;font-size:10px;color:var(--text3)}
+.pin-text b{font-weight:600;color:var(--text)}
+.pins-empty{font-size:10px;color:var(--text3);line-height:1.4}
+.pin-pop-head{font-weight:600;margin-bottom:2px}
+.pin-pop-note{font-size:12px;color:var(--text2);margin-bottom:4px}
+.pin-pop-km{font-family:'Space Mono',monospace;font-size:10px;color:var(--text3)}
+.pin-pop-btns{display:flex;gap:6px;margin-top:8px}
+.pf-pin line{stroke:var(--accent);stroke-width:1.2}
+.pf-pin circle{fill:var(--accent)}
+#pin-modal{display:none;position:fixed;inset:0;background:rgba(0,0,0,.7);z-index:9999;align-items:center;justify-content:center}
+#pin-modal.open{display:flex}
+#pin-modal-box{background:var(--surface);border:1px solid var(--border2);border-radius:6px;padding:20px;width:min(340px,calc(100vw - 32px));box-shadow:0 8px 32px rgba(0,0,0,.6);display:flex;flex-direction:column;gap:10px}
+#pin-modal-box h3{font-size:14px;font-weight:600;color:var(--text);font-family:'Space Mono',monospace;letter-spacing:1px}

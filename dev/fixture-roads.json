@@ -719,7 +719,33 @@
      1229,
      1133
     ]
-   }
+   },
+   "pins": [
+    {
+     "id": "fx1",
+     "type": "surface",
+     "km": 2.272,
+     "lat": 48.953804,
+     "lon": 19.616739,
+     "note": "Gravel washed onto the apex"
+    },
+    {
+     "id": "fx2",
+     "type": "wildlife",
+     "km": 9.119,
+     "lat": 48.98424,
+     "lon": 19.65593,
+     "note": "Deer cross by the meadow"
+    },
+    {
+     "id": "fx3",
+     "type": "corner",
+     "km": 13.043,
+     "lat": 48.994573,
+     "lon": 19.678006,
+     "note": "Tightens after the crest"
+    }
+   ]
   },
   {
    "id": 1700000000001,
@@ -4299,7 +4325,17 @@
      481,
      481
     ]
-   }
+   },
+   "pins": [
+    {
+     "id": "fx4",
+     "type": "note",
+     "km": 8.41,
+     "lat": 48.525435,
+     "lon": 19.425355,
+     "note": "<img src=x onerror=alert(1)> must show as text"
+    }
+   ]
   }
  ]
 }

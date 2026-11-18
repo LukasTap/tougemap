@@ -148,6 +148,34 @@ function wireModal() {
   document.getElementById('name-modal-cancel')?.addEventListener('click', closeNameModal);
 }
 
+// ── PIN MODAL (type + note) ─────────────────────────────────────────────────
+// types: { key: { icon, label, hint } } (pins.js PIN_TYPES). onDelete given →
+// the Delete button shows (editing an existing pin).
+export function openPinModal({ title = 'New pin', types, type, note = '', onSave, onDelete }) {
+  const modal = document.getElementById('pin-modal');
+  const sel = document.getElementById('pin-type');
+  const noteEl = document.getElementById('pin-note');
+  const del = document.getElementById('pin-delete');
+  document.getElementById('pin-modal-title').textContent = title;
+  sel.innerHTML = '';
+  for (const [key, t] of Object.entries(types)) {
+    const o = document.createElement('option');
+    o.value = key;
+    o.textContent = `${t.icon}  ${t.label} — ${t.hint}`;
+    sel.appendChild(o);
+  }
+  sel.value = type in types ? type : Object.keys(types)[0];
+  noteEl.value = note;
+  del.style.display = onDelete ? '' : 'none';
+  const close = () => modal.classList.remove('open');
+  document.getElementById('pin-ok').onclick = () => { close(); onSave?.({ type: sel.value, note: noteEl.value }); };
+  document.getElementById('pin-cancel').onclick = close;
+  noteEl.onkeydown = (e) => { if (e.key === 'Enter') document.getElementById('pin-ok').click(); };
+  del.onclick = () => { if (confirm('Delete this pin?')) { close(); onDelete(); } };
+  modal.classList.add('open');
+  setTimeout(() => noteEl.focus(), 30);
+}
+
 // ── UNLOCK (decrypt) & SETTINGS (token / set-passphrase) ─────────────────────
 // This module only COLLECTS input and hands it to onSubmit — app.js persists and
 // (re)encrypts. Nothing is logged. Two modes share the #onboard overlay.

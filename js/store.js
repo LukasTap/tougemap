@@ -1,5 +1,6 @@
 // js/store.js — data model, migration, and (browser) IndexedDB cache
 import { polylineKm } from './geo.js';
+import { sanitizePins } from './pins.js';
 
 export const SCHEMA_VERSION = 2;
 export const META_DEFAULT = { pavement: null, character: null, deer: null, notes: '' };
@@ -37,9 +38,10 @@ export function normalizeRoad(r, fallbackId = Date.now()) {
     created: r.created ?? r.saved ?? new Date().toISOString().slice(0, 10),
     driveTimeFromHome: r.driveTimeFromHome ?? null,
     meta: migrateMeta({ ...META_DEFAULT, ...(r.meta ?? {}) }),
-    // Elevation profile (terrain.js) — kept only when present, so roads saved
-    // before it existed round-trip unchanged.
-    ...(r.terrain?.ele ? { terrain: { ele: r.terrain.ele.slice() } } : {})
+    // Elevation profile (terrain.js) and hazard pins (pins.js) — kept only
+    // when present, so roads saved before they existed round-trip unchanged.
+    ...(r.terrain?.ele ? { terrain: { ele: r.terrain.ele.slice() } } : {}),
+    ...(Array.isArray(r.pins) && r.pins.length ? { pins: sanitizePins(r.pins) } : {})
   };
 }
 

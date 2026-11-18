@@ -11,7 +11,7 @@
 // copy can never silently overwrite a newer file: GitHub answers 409 instead.
 import { migrate, emptyData, cacheRead, cacheWrite, cacheClear } from './store.js';
 import { fetchWithTimeout } from './http.js';
-import { REPO, DEV_FIXTURE } from './config.js';
+import { REPO, DEV_FIXTURE, DEV_FAKE_SAVE } from './config.js';
 import { isEncrypted, encryptData, decryptData } from './crypto.js';
 
 const defaultFetch = (u, o) => fetchWithTimeout(u, o, 15000);
@@ -129,6 +129,7 @@ export async function readRoads(auth = {}, { fetchFn = defaultFetch } = {}) {
 // Writes `data` as the new roads.json, replacing exactly the version `baseSha`
 // names (null = the file must not exist yet). Returns the new file's sha.
 export async function writeRoads(auth = {}, data, baseSha, { fetchFn = defaultFetch } = {}) {
+  if (DEV_FAKE_SAVE) return 'dev-fake-' + Date.now(); // localhost ?fixture&fakesave only
   if (!auth.token) throw new Error('No GitHub token on this device — add one in 🔑 settings');
   let payload = data;
   if (auth.passphrase) {

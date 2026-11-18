@@ -8,6 +8,7 @@ import { route, nearestPoint, airFallback } from './routing.js';
 import { polylineKm } from './geo.js';
 import { normalizeRoad } from './store.js';
 import { computeTerrain } from './terrain.js';
+import { sanitizePins } from './pins.js';
 
 const SAVED_COLOR = '#b000ff'; // saved roads always render deep purple (no per-road color in v2)
 
@@ -349,6 +350,28 @@ export async function deleteRoad(id, appState) {
     selectedRoadId = null;
     if (selectListener) selectListener(null);
   }
+  renderSavedRoads(appState);
+}
+
+// ── HAZARD PINS (pins.js) ───────────────────────────────────────────────────
+/** Adds the pin, or replaces the one with the same id (edit / move). */
+// Both re-render the saved roads afterwards, like every other edit: that also
+// refreshes the road list selectRoad() reads, so re-opening the road shows the
+// change.
+export async function savePin(roadId, pin, appState) {
+  await appState.repo.commit(appState.auth, next => {
+    const road = findRoad(next, roadId);
+    road.pins = sanitizePins([...(road.pins || []).filter(p => p.id !== pin.id), pin]);
+  });
+  renderSavedRoads(appState);
+}
+
+export async function deletePin(roadId, pinId, appState) {
+  await appState.repo.commit(appState.auth, next => {
+    const road = findRoad(next, roadId);
+    const pins = (road.pins || []).filter(p => p.id !== pinId);
+    if (pins.length) road.pins = pins; else delete road.pins;
+  });
   renderSavedRoads(appState);
 }
 

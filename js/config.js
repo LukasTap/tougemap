@@ -19,3 +19,8 @@ const isLocalHost = typeof location !== 'undefined' &&
 export const DEV_FIXTURE = isLocalHost && new URLSearchParams(location.search).has('fixture')
   ? 'dev/fixture-roads.json'
   : null;
+
+// Local development only, on top of ?fixture: open /?fixture&fakesave to try
+// every editing flow (pins, rename, home…) against the sample data. "Saving"
+// then only updates the page's memory — nothing is sent anywhere.
+export const DEV_FAKE_SAVE = !!DEV_FIXTURE && new URLSearchParams(location.search).has('fakesave');

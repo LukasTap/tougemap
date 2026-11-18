@@ -197,6 +197,20 @@
     </div>
   </div>
 
+  <!-- PIN MODAL: type + note for a hazard pin (pins.js) -->
+  <div id="pin-modal">
+    <div id="pin-modal-box">
+      <h3 id="pin-modal-title">New pin</h3>
+      <select id="pin-type" class="search-input"></select>
+      <input id="pin-note" class="search-input" placeholder="Note (optional)" maxlength="160" autocomplete="off">
+      <div class="modal-btns">
+        <button class="modal-btn cancel" id="pin-delete" style="display:none">Delete</button>
+        <button class="modal-btn cancel" id="pin-cancel">Cancel</button>
+        <button class="modal-btn ok" id="pin-ok">Save</button>
+      </div>
+    </div>
+  </div>
+
   <!-- UNLOCK (decrypt) / SETTINGS (token + set/change passphrase) -->
   <div id="onboard" style="display:none">
     <div class="box">

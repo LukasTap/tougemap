@@ -6,6 +6,7 @@
 import { initMap, setLayer, setNight, isNight, locate, sortByProximity, map, discoverGroup } from './map.js';
 import { loadAuth, saveToken, savePassphrase, forgetDevice } from './sync.js';
 import { createRepo } from './repo.js';
+import { DEV_FAKE_SAVE } from './config.js';
 import { idbGet, idbPut, DISCOVER_DB, DISCOVER_STORE } from './store.js';
 import {
   createWeatherClient, wmoDesc, nightGroups, nightExtremes, decisionHours,
@@ -19,12 +20,15 @@ import { roadCardHtml, thumbnailSvg, metaChipsHtml, sortRoads, filterRoads, esca
 import {
   onDraftUpdate, getDraftState, startPlacing, handleMapClick, clearRoutePoint,
   removeWaypoint, clearWaypoints, saveRoad, editMeta, renameRoad,
-  deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker
+  deleteRoad, setHome, renderSavedRoads, selectRoad, onRoadSelect, renderHomeMarker,
+  savePin, deletePin
 } from './planner.js';
+import { PIN_TYPES, snapToRoad, MAX_PIN_OFFSET_KM, newPinId } from './pins.js';
+import { pinsGroup } from './map.js';
 import { nearestPoint, route } from './routing.js';
 import { buildOverpassQuery, fetchOverpass, joinAndScore, curvColor, fogColor } from './curvature.js';
 import {
-  isDesktop, showView, showInspector, hideInspector, openSheet,
+  isDesktop, showView, showInspector, hideInspector, openSheet, openPinModal,
   openNameModal, showUnlock, showSettings, hideOnboarding, setDiscoverStatus, setStatusBanner, initUi
 } from './ui.js';
 
@@ -139,6 +143,7 @@ function getDesktopContainer(name) {
 
 function switchView(name) {
   currentView = name;
+  stopPinPlacing();
   if (name !== 'tonight') hideConditionsOnMap(); // other views show the roads purple
   const container = showView(name);
   renderView(name, container);
@@ -306,6 +311,7 @@ function roadInspectorHtml(road, editable) {
         <div class="lbl" style="${subLbl}">${road.points.length} pts</div>
       </div>
     </div>
+    ${pinsSectionHtml(road, editable)}
     <div id="inspector-weather" class="weather-loading" style="margin-top:14px">Loading forecast…</div>
     ${editable ? `
     <button class="pt-btn" id="insp-edit-toggle" style="width:100%;margin-top:14px">✎ Edit details</button>
@@ -477,7 +483,7 @@ function axisHtml(segments, hourW) {
 // colour of its own worst fog — so "which end is the problem" is visible before
 // any number is read. A flat road isn't stretched into fake mountains: the
 // vertical scale never shows less than 50 m.
-function profileSvg(profile, pointStats) {
+function profileSvg(profile, pointStats, pins = []) {
   const s = (profile || []).filter(p => typeof p.ele === 'number');
   if (s.length < 2) return '';
   const W = 308, H = 40, top = 5, bottom = 3;
@@ -489,11 +495,16 @@ function profileSvg(profile, pointStats) {
   const line = 'M' + s.map(p => `${x(p.km)} ${y(p.ele)}`).join(' L');
   const marks = pointStats.filter(p => typeof p.ele === 'number').map(p =>
     `<circle cx="${x(p.km)}" cy="${y(p.ele)}" r="3.4" fill="${p.fog != null ? fogColor(p.fog) : 'var(--text3)'}" class="pf-mark"/>`).join('');
+  // Hazard pins as small ticks on the baseline: "gravel just below the summit"
+  // becomes visible without reading a list.
+  const ticks = pins.map(p => `<g class="pf-pin"><title>${escapeHtml(`${PIN_TYPES[p.type]?.label || 'Pin'} · km ${p.km.toFixed(1)}${p.note ? ` · ${p.note}` : ''}`)}</title>` +
+    `<line x1="${x(p.km)}" x2="${x(p.km)}" y1="${H - 9}" y2="${H}"/><circle cx="${x(p.km)}" cy="${H - 9}" r="1.8"/></g>`).join('');
   return `<svg class="profile-chart" viewBox="0 0 ${W} ${H}" role="img" aria-label="Elevation along the road, ${lo}–${hi} m">
       <path class="pf-area" d="${line} L${W} ${H} L0 ${H} Z"/>
       <path class="pf-line" d="${line}"/>
       <text class="nc-grid-lbl" x="${W}" y="${top + 2}" text-anchor="end">${hi} m</text>
       <text class="nc-grid-lbl" x="${W}" y="${H - 1}" text-anchor="end">${lo} m</text>
+      ${ticks}
       ${marks}
     </svg>`;
 }
@@ -537,7 +548,7 @@ function roadSurfaceHtml(cond, pointStats, now, multi) {
     </div>`;
 }
 
-function weatherHtml(cond, profile) {
+function weatherHtml(cond, profile, pins = []) {
   const now = appState.now();
   const multi = cond.points.length > 1;
   const at = (label) => (multi && label ? ` · ${label.toLowerCase()}` : '');
@@ -561,7 +572,7 @@ function weatherHtml(cond, profile) {
         <span class="where-ele">${p.ele != null ? `${p.ele} m` : ''}</span>
         <span class="where-val">${p.fog != null ? `fog ${p.fog}%` : '—'}${p.temp != null ? ` · <span class="${p.temp <= 3 ? 'w-ice' : ''}">${Math.round(p.temp)}°C</span>` : ''}${surfaceNote(p.surface)}</span>
       </div>`).join('')}</div>` : '';
-  const where = profileSvg(profile, pointStats) + rows;
+  const where = profileSvg(profile, pointStats, pins) + rows;
   const road = roadSurfaceHtml(cond, pointStats, now, multi);
 
   const tile = (k, v, when, cls) =>
@@ -649,7 +660,7 @@ async function fillInspectorWeather(road) {
     const cond = await conditionsFor(road);
     if (!el.isConnected) return; // another road was opened meanwhile
     if (!cond) { el.textContent = 'Forecast unavailable.'; return; }
-    const { html, chart, multi } = weatherHtml(cond, roadProfile(road));
+    const { html, chart, multi } = weatherHtml(cond, roadProfile(road), road.pins || []);
     el.className = '';
     el.innerHTML = html;
     if (chart) wireScrub(el, chart, multi);
@@ -720,11 +731,153 @@ async function showHomeLine(road) {
   } catch { /* routing down — keep the straight placeholder */ }
 }
 
+// ── HAZARD PINS (pins.js) ───────────────────────────────────────────────────
+// Shown for the selected road always, and for every road once zoomed in far
+// enough that they help rather than clutter. Placed, moved, edited and deleted
+// on the PC that can save; read-only (tap for the note) everywhere else.
+const PIN_ZOOM = 12;
+let selectedRoadId = null;
+let pinPlacing = null;              // road id while waiting for a click on the road
+const pinMarkers = new Map();       // pin id → marker, for "jump to pin" from the list
+const canEditPins = () => isDesktop() && !repo.writeBlock(appState.auth);
+
+function pinsSectionHtml(road, editable) {
+  const pins = road.pins || [];
+  if (!pins.length && !editable) return '';
+  const rows = pins.map(p => `
+      <div class="pin-row" data-pin="${escapeHtml(p.id)}" title="Show on map">
+        <span class="pin-km">km ${p.km.toFixed(1)}</span>
+        <span class="pin-ico">${PIN_TYPES[p.type].icon}</span>
+        <span class="pin-text"><b>${PIN_TYPES[p.type].label}</b>${p.note ? ` · ${escapeHtml(p.note)}` : ''}</span>
+      </div>`).join('');
+  return `<div class="pins">
+      <div class="pins-head"><span class="ctrl-label" style="margin:0">Pins</span>${editable ? '<button class="pt-btn" id="insp-add-pin">+ Add pin</button>' : ''}</div>
+      ${rows || '<div class="pins-empty">No pins yet. Mark bad surface, wildlife crossings or tricky corners.</div>'}
+    </div>`;
+}
+
+function wirePinsSection(road) {
+  document.getElementById('insp-add-pin')?.addEventListener('click', () => startPinPlacing(road));
+  document.querySelectorAll('.pin-row[data-pin]').forEach(row => row.addEventListener('click', () => {
+    const id = row.dataset.pin;
+    const m = pinMarkers.get(id);
+    if (!m) return;
+    // Open the popup once the map has settled: a zoom that crosses PIN_ZOOM
+    // redraws the markers, which would close a popup opened on the old one.
+    const open = () => pinMarkers.get(id)?.openPopup();
+    const zoom = Math.max(map.getZoom(), 14);
+    if (zoom === map.getZoom() && map.getBounds().pad(-0.2).contains(m.getLatLng())) open();
+    else { map.once('moveend', open); map.setView(m.getLatLng(), zoom); }
+  }));
+}
+
+// Zooming only changes which pins show when it crosses PIN_ZOOM; redrawing on
+// every zoom step would also close any open pin popup for nothing.
+let pinsShownZoomed = null;
+function onMapZoomForPins() {
+  const zoomed = map.getZoom() >= PIN_ZOOM;
+  if (zoomed !== pinsShownZoomed) renderPinsOnMap();
+}
+
+function pinPopupHtml(road, pin, editable) {
+  const t = PIN_TYPES[pin.type];
+  return `<div class="pin-pop">
+      <div class="pin-pop-head">${t.icon} ${t.label}</div>
+      ${pin.note ? `<div class="pin-pop-note">${escapeHtml(pin.note)}</div>` : ''}
+      <div class="pin-pop-km">${escapeHtml(road.name)} · km ${pin.km.toFixed(1)}</div>
+      ${editable ? '<div class="pin-pop-btns"><button class="pt-btn" data-pin-edit>Edit</button><button class="pt-btn danger" data-pin-del>Delete</button></div>' : ''}
+    </div>`;
+}
+
+function renderPinsOnMap() {
+  pinsGroup.clearLayers();
+  pinMarkers.clear();
+  if (!map) return;
+  const zoomed = map.getZoom() >= PIN_ZOOM;
+  pinsShownZoomed = zoomed;
+  const editable = canEditPins();
+  for (const road of appState.data.roads) {
+    if (!road.pins?.length || (!zoomed && road.id !== selectedRoadId)) continue;
+    for (const pin of road.pins) {
+      const m = L.marker([pin.lat, pin.lon], {
+        icon: L.divIcon({ className: 'pin-icon', html: `<span>${PIN_TYPES[pin.type].icon}</span>`, iconSize: [24, 24], iconAnchor: [12, 12] }),
+        draggable: editable, zIndexOffset: 1500, title: PIN_TYPES[pin.type].label, keyboard: false
+      });
+      m.bindPopup(() => pinPopupHtml(road, pin, editable), { offset: [0, -8] });
+      m.on('popupopen', (e) => wirePinPopup(e.popup.getElement(), road, pin));
+      // Dragging moves the pin ALONG the road: wherever it's dropped, it snaps back onto the line.
+      if (editable) m.on('dragend', (e) => {
+        const { lat, lng } = e.target.getLatLng();
+        const s = snapToRoad(road.points, lat, lng);
+        savePin(road.id, { ...pin, lat: s.lat, lon: s.lon, km: s.km }, appState)
+          .then(() => afterPinChange(road.id)).catch(err => { renderPinsOnMap(); failAlert('Pin not moved')(err); });
+      });
+      m.addTo(pinsGroup);
+      pinMarkers.set(pin.id, m);
+    }
+  }
+}
+
+function wirePinPopup(el, road, pin) {
+  el?.querySelector('[data-pin-edit]')?.addEventListener('click', () => {
+    map.closePopup();
+    openPinModal({
+      title: 'Edit pin', types: PIN_TYPES, type: pin.type, note: pin.note,
+      onSave: ({ type, note }) => savePin(road.id, { ...pin, type, note }, appState)
+        .then(() => afterPinChange(road.id)).catch(failAlert('Pin not saved')),
+      onDelete: () => deletePin(road.id, pin.id, appState)
+        .then(() => afterPinChange(road.id)).catch(failAlert('Pin not deleted'))
+    });
+  });
+  el?.querySelector('[data-pin-del]')?.addEventListener('click', () => {
+    if (!confirm('Delete this pin?')) return;
+    map.closePopup();
+    deletePin(road.id, pin.id, appState).then(() => afterPinChange(road.id)).catch(failAlert('Pin not deleted'));
+  });
+}
+
+// Re-open the road from saved data when it's the one on screen (list + strip
+// ticks refresh), otherwise just redraw the markers.
+function afterPinChange(roadId) {
+  if (selectedRoadId === roadId) refreshAfterEdit(roadId);
+  else renderPinsOnMap();
+}
+
+function startPinPlacing(road) {
+  if (writeBlockedAlert()) return;
+  pinPlacing = road.id;
+  map.getContainer().style.cursor = 'crosshair';
+  setStatusBanner(`Click on “${road.name}” to place a pin · Esc cancels`, 'info');
+}
+function stopPinPlacing() {
+  if (pinPlacing == null) return;
+  pinPlacing = null;
+  map.getContainer().style.cursor = '';
+  updateStatusBanner();
+}
+function placePinAt(lat, lon) {
+  const road = appState.data.roads.find(r => r.id === pinPlacing);
+  if (!road) { stopPinPlacing(); return; }
+  const s = snapToRoad(road.points, lat, lon);
+  if (!s || s.offKm > MAX_PIN_OFFSET_KM) {
+    setStatusBanner(`That's ${Math.round((s?.offKm ?? 0) * 1000)} m from “${road.name}” — click on the road itself · Esc cancels`, 'warn');
+    return;
+  }
+  stopPinPlacing();
+  openPinModal({
+    title: `New pin · km ${s.km.toFixed(1)}`, types: PIN_TYPES, type: 'surface', note: '',
+    onSave: ({ type, note }) => savePin(road.id, { id: newPinId(), type, note, lat: s.lat, lon: s.lon, km: s.km }, appState)
+      .then(() => afterPinChange(road.id)).catch(failAlert('Pin not saved'))
+  });
+}
+
 function wireRoadSelection() {
   onRoadSelect((road) => {
     renderSeq++; // the inspector now owns the panel/sheet — drop pending list renders
+    selectedRoadId = road?.id ?? null;
+    renderPinsOnMap();
     if (!road) { hideInspector(); clearHomeLine(); return; }
-    const editable = isDesktop() && !!appState.auth.token; // editor = writer with a token
+    const editable = isDesktop() && (!!appState.auth.token || DEV_FAKE_SAVE); // editor = writer with a token
     const html = roadInspectorHtml(road, editable);
     if (isDesktop()) showInspector(html); else openSheet(road.name, html, 'half');
     // Back re-renders the list you came from. On mobile this used to call
@@ -732,6 +885,7 @@ function wireRoadSelection() {
     // still inside it, so the button appeared to do nothing but shrink things.
     document.getElementById('insp-back-btn')?.addEventListener('click', () => switchView(currentView));
     if (editable) wireInspectorEdit(road);
+    wirePinsSection(road);
     fillInspectorWeather(road);
     showHomeLine(road);
   });
@@ -819,7 +973,7 @@ function updateHomeLabel(home) {
 // drag that was refused), the marker snaps back to where home really is.
 function renderHome() {
   const home = appState.data.home;
-  const canEdit = isDesktop() && !!appState.auth.token && repo.source === 'remote';
+  const canEdit = isDesktop() && !repo.writeBlock(appState.auth);
   renderHomeMarker(home, canEdit ? (lat, lon) => applyHome(lat, lon) : null);
   updateHomeLabel(home);
 }
@@ -962,6 +1116,7 @@ function wireLayerToggle() {
 function wireMapClick() {
   map.on('click', (e) => {
     if (!isDesktop()) return; // phone is view-only — no drawing, no home placement
+    if (pinPlacing != null) { placePinAt(e.latlng.lat, e.latlng.lng); return; }
     if (placingHome) {
       placingHome = false;
       map.getContainer().style.cursor = '';
@@ -970,6 +1125,8 @@ function wireMapClick() {
     }
     handleMapClick(e.latlng.lat, e.latlng.lng);
   });
+  map.on('zoomend', onMapZoomForPins);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') stopPinPlacing(); });
   map.on('mousemove', (e) => {
     const bar = document.getElementById('coords-bar');
     if (bar) bar.textContent = `${e.latlng.lat.toFixed(5)}, ${e.latlng.lng.toFixed(5)}`;
@@ -997,7 +1154,7 @@ function wireChrome() {
 // everything is normal; otherwise it explains why saving is off.
 function updateStatusBanner() {
   const when = (e) => (e?.message ? ` (${e.message})` : '');
-  if (repo.source === 'fixture') setStatusBanner('Sample data (dev fixture) — saving is off', 'info');
+  if (repo.source === 'fixture') setStatusBanner(DEV_FAKE_SAVE ? 'Sample data (dev fixture) — edits are kept in this page only' : 'Sample data (dev fixture) — saving is off', 'info');
   else if (repo.source === 'cache') setStatusBanner(`Offline copy — couldn’t reach GitHub${when(repo.error)}. Viewing only; saving is off until a reload succeeds.`, 'warn');
   else if (repo.source === 'none') setStatusBanner(`Couldn’t load roads from GitHub${when(repo.error)} and there’s no offline copy on this device. Saving is off — reload to retry.`, 'error');
   else if (repo.notice) setStatusBanner(repo.notice, 'warn');
@@ -1021,6 +1178,7 @@ async function loadAndRender() {
   updateDraftUi();
   applyPlannerHint();
   switchView('library');
+  renderPinsOnMap();
   backfillTerrain(); // background; only runs where saving is possible
   return true;
 }
